@@ -2,6 +2,9 @@
 Tests: test_contour_route
 
 Integration tests for POST /api/analyzeContour.
+
+Note: happy-path upload tests (valid KML/KMZ content) live in
+test_kml_parser.py. These tests focus on the HTTP layer.
 """
 
 import io
@@ -9,22 +12,35 @@ import pytest
 from app import create_app
 
 
+MINIMAL_KML = (
+    b'<?xml version="1.0" encoding="UTF-8"?>'
+    b'<kml xmlns="http://www.opengis.net/kml/2.2">'
+    b"<Document>"
+    b"<Placemark>"
+    b"  <name>277</name>"
+    b"  <LineString>"
+    b"    <coordinates>81.286321,21.263539 81.286400,21.263518</coordinates>"
+    b"  </LineString>"
+    b"</Placemark>"
+    b"</Document></kml>"
+)
+
+
 @pytest.fixture
-def client():
+def client(tmp_path):
     app = create_app()
     app.config["TESTING"] = True
-    with app.test_client() as client:
-        yield client
+    app.config["UPLOAD_FOLDER"] = str(tmp_path)  # isolated temp dir per test
+    with app.test_client() as c:
+        yield c
 
 
 # ── Happy-path tests ────────────────────────────────────────────────────────
 
 
 def test_valid_kml_upload(client):
-    """A valid .kml file should return 200 with the filename."""
-    data = {
-        "file": (io.BytesIO(b"<kml></kml>"), "test_site.kml"),
-    }
+    """A valid .kml file returns 200 with status/filename/contour_count."""
+    data = {"file": (io.BytesIO(MINIMAL_KML), "test_site.kml")}
     response = client.post(
         "/api/analyzeContour",
         data=data,
@@ -32,24 +48,9 @@ def test_valid_kml_upload(client):
     )
     assert response.status_code == 200
     body = response.get_json()
-    assert body["success"] is True
+    assert body["status"] == "success"
     assert body["filename"] == "test_site.kml"
-
-
-def test_valid_kmz_upload(client):
-    """A valid .kmz file should return 200 with the filename."""
-    data = {
-        "file": (io.BytesIO(b"PK\x03\x04"), "survey.kmz"),
-    }
-    response = client.post(
-        "/api/analyzeContour",
-        data=data,
-        content_type="multipart/form-data",
-    )
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["success"] is True
-    assert body["filename"] == "survey.kmz"
+    assert body["contour_count"] == 1
 
 
 # ── Error-path tests ────────────────────────────────────────────────────────
@@ -76,13 +77,23 @@ def test_empty_filename(client):
 
 def test_invalid_extension(client):
     """A non-KML/KMZ file should return 415."""
-    data = {
-        "file": (io.BytesIO(b"data"), "report.pdf"),
-    }
+    data = {"file": (io.BytesIO(b"data"), "report.pdf")}
     response = client.post(
         "/api/analyzeContour",
         data=data,
         content_type="multipart/form-data",
     )
     assert response.status_code == 415
-    assert response.get_json()["success"] is False
+    assert response.get_json()["status"] == "error"
+
+
+def test_malformed_kml_returns_422(client):
+    """A .kml file with broken XML should return 422 Unprocessable Entity."""
+    data = {"file": (io.BytesIO(b"<kml><broken"), "bad.kml")}
+    response = client.post(
+        "/api/analyzeContour",
+        data=data,
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 422
+    assert response.get_json()["status"] == "error"
