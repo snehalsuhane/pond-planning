@@ -3,21 +3,19 @@ Service: contour_service
 
 Handles business logic for the /api/analyzeContour endpoint.
 
-Current scope:
-  - Validate file extension (KML / KMZ only)
-  - Save file to the uploads directory
-  - Parse KML/KMZ via kml_parser
-  - Return basic parsing summary (status, filename, contour_count)
-
-Future scope:
-  - Run terrain analysis  (analysis/terrain.py)
-  - Run catchment analysis (analysis/catchment.py)
+Pipeline:
+  1. Validate file extension
+  2. Save to uploads/
+  3. Parse KML/KMZ  →  utils.kml_parser.parse()
+  4. Validate & analyse terrain  →  analysis.terrain.analyze_contours()
+  5. Return structured JSON response
 """
 
 import os
 from werkzeug.utils import secure_filename
 
 from utils.kml_parser import parse, KMLParseError
+from analysis.terrain import analyze_contours, TerrainValidationError
 
 
 def _allowed_extension(filename: str, allowed_extensions: set) -> bool:
@@ -30,11 +28,11 @@ def _allowed_extension(filename: str, allowed_extensions: set) -> bool:
 
 def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
     """
-    Validate, save, and parse a KML/KMZ upload.
+    Validate, save, parse, and analyse a KML/KMZ upload.
 
     Parameters
     ----------
-    file               : werkzeug FileStorage object from the request
+    file               : werkzeug FileStorage object
     upload_folder      : absolute path to the uploads directory
     allowed_extensions : set of permitted extensions, e.g. {'kml', 'kmz'}
 
@@ -72,23 +70,28 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
                 "error": str(exc),
                 "filename": filename,
             },
-            422,  # Unprocessable Entity
+            422,
         )
 
-    # ── 4. (Stub) Terrain analysis ──────────────────────────────────────────
-    # from analysis.terrain import analyse as terrain_analyse
-    # terrain_result = terrain_analyse(contours)
+    # ── 4. Terrain validation & analysis ────────────────────────────────────
+    try:
+        terrain = analyze_contours(contours)
+    except TerrainValidationError as exc:
+        return (
+            {
+                "status": "error",
+                "error": str(exc),
+                "filename": filename,
+            },
+            422,
+        )
 
-    # ── 5. (Stub) Catchment analysis ────────────────────────────────────────
-    # from analysis.catchment import analyse as catchment_analyse
-    # catchment_result = catchment_analyse(contours)
-
-    # ── 6. Return parsing summary ────────────────────────────────────────────
+    # ── 5. Success response ──────────────────────────────────────────────────
     return (
         {
             "status": "success",
             "filename": filename,
-            "contour_count": len(contours),
+            "terrain": terrain,
         },
         200,
     )

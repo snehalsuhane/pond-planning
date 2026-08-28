@@ -22,6 +22,12 @@ MINIMAL_KML = (
     b"    <coordinates>81.286321,21.263539 81.286400,21.263518</coordinates>"
     b"  </LineString>"
     b"</Placemark>"
+    b"<Placemark>"
+    b"  <name>278</name>"
+    b"  <LineString>"
+    b"    <coordinates>81.286500,21.263600 81.286600,21.263700</coordinates>"
+    b"  </LineString>"
+    b"</Placemark>"
     b"</Document></kml>"
 )
 
@@ -50,7 +56,12 @@ def test_valid_kml_upload(client):
     body = response.get_json()
     assert body["status"] == "success"
     assert body["filename"] == "test_site.kml"
-    assert body["contour_count"] == 1
+    terrain = body["terrain"]
+    assert terrain["contour_count"] == 2
+    assert "min_elevation_m" in terrain
+    assert "max_elevation_m" in terrain
+    assert "total_points" in terrain
+    assert "bounds" in terrain
 
 
 # ── Error-path tests ────────────────────────────────────────────────────────
