@@ -6,15 +6,17 @@ Handles business logic for the /api/analyzeContour endpoint.
 Pipeline:
   1. Validate file extension
   2. Save to uploads/
-  3. Parse KML/KMZ  →  utils.kml_parser.parse()
-  4. Validate & analyse terrain  →  analysis.terrain.analyze_contours()
-  5. Return structured JSON response
+  3. Parse KML/KMZ       →  utils.kml_parser.parse()
+  4. Validate & analyse  →  analysis.terrain.analyze_contours()
+  5. Project coordinates →  utils.projection.project_contours()
+  6. Return structured JSON response
 """
 
 import os
 from werkzeug.utils import secure_filename
 
 from utils.kml_parser import parse, KMLParseError
+from utils.projection import project_contours
 from analysis.terrain import analyze_contours, TerrainValidationError
 
 
@@ -86,7 +88,14 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
             422,
         )
 
-    # ── 5. Success response ──────────────────────────────────────────────────
+    # ── 5. Project coordinates into metres ──────────────────────────────────
+    projected_contours, crs_info = project_contours(contours)
+    # projected_contours hold 'projected_coordinates' (X/Y metres) alongside
+    # the original 'coordinates' (lon/lat).  They are not returned in the API
+    # response (too large) but will be passed to DEM generation in a later step.
+
+    # ── 6. Success response ──────────────────────────────────────────────────
+    terrain["crs"] = crs_info   # embed the chosen CRS in the terrain block
     return (
         {
             "status": "success",
