@@ -89,17 +89,26 @@ The API will be available at `http://localhost:5000`.
 - Automatically selects the appropriate **UTM zone** from the centroid of the input data — nothing is hardcoded, making it reusable for any geographic location
 - Each contour dict gains a `projected_coordinates` key; the original `coordinates` key is preserved unchanged
 - The chosen CRS (EPSG code, name, unit) is returned alongside the projected data and included in the API response
-- Projected coordinates are used internally by the pipeline for metric calculations; only the CRS metadata is returned in the API response
 
 ### DEM Generation — `analysis/dem.py`
 - Converts projected contour lines into a **continuous elevation surface** on a regular grid
-- Extracts all `(X, Y, elevation)` scatter points from contour line vertices
-- **Linear interpolation** (`scipy.griddata`) fills the grid inside the convex hull of the input data
-- **Nearest-neighbour fill** covers edge/corner regions outside the convex hull, ensuring zero NaN cells
-- Grid resolution is **auto-derived** from the data extent (~500 cells along the longest axis) and snapped to the contour interval — no hardcoded values
-- Resolution can also be specified explicitly for finer or coarser grids
-- The DEM array is saved as a `.npy` file in `uploads/` alongside the source KML for use by downstream analysis steps
-- Returns grid metadata (shape, resolution, bounds, NaN fraction, elevation range) in the API response
+- **Linear interpolation** (`scipy.griddata`) fills the grid inside the convex hull; **nearest-neighbour fill** covers edges, ensuring zero NaN cells
+- Grid resolution is **auto-derived** from the data extent and snapped to the contour interval — no hardcoded values
+- The DEM array is saved as a `.npy` file in `uploads/` alongside the source KML for downstream steps
+
+### Slope Calculation — `analysis/terrain.py`
+- Computes per-cell slope in degrees using `numpy.gradient` with a central-difference scheme
+- Formula: `slope = arctan( sqrt( (dZ/dX)² + (dZ/dY)² ) )`
+- Returns slope grid (same shape as DEM) plus summary stats: min, max, mean
+- Slope summary is included in the API response under `dem.slope`
+
+### Pond Candidate Identification — `analysis/pond.py`
+- Identifies the most suitable pond location from the DEM + slope grid algorithmically
+- Each cell is scored by a weighted combination of normalised elevation and normalised slope:
+  `score = 0.6 × elev_norm + 0.4 × slope_norm`  (lower score = better site)
+- Cells steeper than `max_slope_deg` (default 8°) and border cells are excluded before selection
+- The best-scoring cell's projected (X, Y) coordinates are back-projected to geographic (lat, lon)
+- Selection weights and slope threshold are configurable — no coordinates are hardcoded
 
 ---
 
@@ -116,11 +125,13 @@ Upload (KML/KMZ)
       ↓
 [analysis/dem.py]       →  interpolate regular elevation grid (DEM), save as .npy
       ↓
-API response: terrain metadata + CRS info + DEM metadata
+[analysis/terrain.py]   →  calculate slope for each DEM cell
       ↓
-[Next] Slope + flow direction
+[analysis/pond.py]      →  score cells, apply masks, select best candidate
       ↓
-[Next] Catchment area
+API response: terrain + CRS + DEM + slope summary + pond_site
+      ↓
+[Next] Catchment area delineation
 ```
 
 ---
@@ -161,7 +172,20 @@ data, projects coordinates, and returns a structured metadata response.
     "elevation_min": 267.0,
     "elevation_max": 298.0,
     "bounds": { "min_x": 360241.5, "min_y": 2349822.4, "max_x": 363121.6, "max_y": 2352406.1 },
-    "saved_to": "contours_1m_dem.npy"
+    "saved_to": "contours_1m_dem.npy",
+    "slope": {
+      "slope_min_deg": 0.0,
+      "slope_max_deg": 18.4,
+      "slope_mean_deg": 3.2
+    }
+  },
+  "pond_site": {
+    "latitude": 21.23982,
+    "longitude": 81.29134,
+    "elevation_m": 267.0,
+    "slope_deg": 1.4,
+    "grid_row": 2,
+    "grid_col": 47
   }
 }
 ```
@@ -189,15 +213,16 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-113 tests across 5 test modules — all passing.
+135 tests across 6 test modules — all passing.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| `test_contour_route.py` | 5 | HTTP layer, status codes, response shape |
+| `test_contour_route.py` | 5 | HTTP layer, status codes, full response shape |
 | `test_kml_parser.py` | 20 | KML/KMZ parsing, namespaces, edge cases |
 | `test_terrain.py` | 27 | Stats, interval logic, bounds, all validation errors |
 | `test_projection.py` | 33 | UTM zone selection, coordinate projection, pipeline |
 | `test_dem.py` | 28 | DEM structure, dimensions, elevation range, NaN, reusability |
+| `test_pond.py` | 22 | Slope values, candidate structure, bounds, data-independence |
 
 ---
 
@@ -206,19 +231,22 @@ python -m pytest tests/ -v
 To parse and validate a KML file:
 
 ```bash
-python verify_kml.py /path/to/your/file.kml
+python scripts/verify_kml.py /path/to/your/file.kml
 ```
 
-To generate and visually validate the DEM:
+To visually validate the DEM:
 
 ```bash
-python visualize_dem.py /path/to/your/file.kml
+python scripts/visualize_dem.py /path/to/your/file.kml
 # outputs: dem_visualization.png
 ```
 
-The PNG shows a side-by-side view of the interpolated elevation surface and a
-contour map reconstructed from the DEM — use it to confirm the terrain looks correct
-before running slope/flow/catchment calculations.
+To visualize terrain + slope + pond candidate (recommended after any change):
+
+```bash
+python scripts/visualize_pond.py /path/to/your/file.kml
+# outputs: pond_candidate.png  (3-panel: DEM, slope map, zoomed candidate view)
+```
 
 ---
 
@@ -229,6 +257,7 @@ before running slope/flow/catchment calculations.
 - [x] Terrain validation & metadata (`analysis/terrain.py`)
 - [x] Coordinate projection to UTM metres (`utils/projection.py`)
 - [x] DEM generation from projected contour data (`analysis/dem.py`)
-- [ ] Slope and flow direction from DEM
-- [ ] `analysis/catchment.py` — catchment area, runoff coefficient, water yield
-- [ ] Pond site suitability scoring
+- [x] Slope calculation from DEM (`analysis/terrain.py`)
+- [x] Pond candidate identification (`analysis/pond.py`)
+- [ ] Catchment area delineation (`analysis/catchment.py`)
+- [ ] Water yield estimation

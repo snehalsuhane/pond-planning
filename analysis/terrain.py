@@ -205,3 +205,62 @@ def analyze_contours(contours: list) -> dict:
             "max_lat": max(all_lats),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Slope calculation (requires numpy — imported lazily to avoid hard dep in
+# the validation-only path)
+# ---------------------------------------------------------------------------
+
+def calculate_slope(dem_result: dict) -> dict:
+    """
+    Compute per-cell slope (in degrees) from a DEM dict as returned by
+    analysis.dem.generate_dem().
+
+    Slope is derived using numpy.gradient, which applies a central-difference
+    scheme over the interior and a one-sided difference at the edges.
+
+        slope = arctan( sqrt( (dZ/dX)² + (dZ/dY)² ) )
+
+    Parameters
+    ----------
+    dem_result : dict
+        Must contain keys 'dem' (2-D ndarray) and 'resolution_m' (float).
+
+    Returns
+    -------
+    dict:
+        slope      - np.ndarray (rows, cols)  slope in degrees
+        slope_min  - float  minimum slope in the grid
+        slope_max  - float  maximum slope in the grid
+        slope_mean - float  mean slope in the grid
+
+    Raises
+    ------
+    ValueError  if dem_result is missing required keys or the DEM is empty.
+    """
+    import numpy as np
+
+    if "dem" not in dem_result or "resolution_m" not in dem_result:
+        raise ValueError(
+            "dem_result must contain 'dem' and 'resolution_m' keys. "
+            "Pass the dict returned by analysis.dem.generate_dem()."
+        )
+
+    dem = dem_result["dem"]
+    res = dem_result["resolution_m"]
+
+    if dem.size == 0:
+        raise ValueError("DEM array is empty.")
+
+    # Gradient: returns (d/dy, d/dx) — row axis first, col axis second
+    grad_y, grad_x = np.gradient(dem, res, res)
+    slope_rad = np.arctan(np.sqrt(grad_x ** 2 + grad_y ** 2))
+    slope_deg = np.degrees(slope_rad)
+
+    return {
+        "slope":      slope_deg,
+        "slope_min":  float(np.nanmin(slope_deg)),
+        "slope_max":  float(np.nanmax(slope_deg)),
+        "slope_mean": float(np.nanmean(slope_deg)),
+    }

@@ -10,7 +10,9 @@ Pipeline:
   4. Validate & analyse  →  analysis.terrain.analyze_contours()
   5. Project coordinates →  utils.projection.project_contours()
   6. Generate DEM        →  analysis.dem.generate_dem()
-  7. Return structured JSON response
+  7. Calculate slope     →  analysis.terrain.calculate_slope()
+  8. Find pond candidate →  analysis.pond.find_pond_candidate()
+  9. Return structured JSON response
 """
 
 import os
@@ -19,8 +21,9 @@ from werkzeug.utils import secure_filename
 import numpy as np
 from utils.kml_parser import parse, KMLParseError
 from utils.projection import project_contours
-from analysis.terrain import analyze_contours, TerrainValidationError
+from analysis.terrain import analyze_contours, TerrainValidationError, calculate_slope
 from analysis.dem import generate_dem, DEMGenerationError
+from analysis.pond import find_pond_candidate, PondCandidateError
 
 
 def _allowed_extension(filename: str, allowed_extensions: set) -> bool:
@@ -107,7 +110,20 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
     dem_save_path = save_path.rsplit(".", 1)[0] + "_dem.npy"
     np.save(dem_save_path, dem_result["dem"])
 
-    # ── 7. Success response ──────────────────────────────────────────────────
+    # ── 7. Slope ──────────────────────────────────────────────────────────────────
+    slope_result = calculate_slope(dem_result)
+
+    # ── 8. Pond candidate ─────────────────────────────────────────────────────────
+    epsg = crs_info["epsg"]
+    try:
+        candidate = find_pond_candidate(dem_result, slope_result, epsg)
+    except PondCandidateError as exc:
+        return (
+            {"status": "error", "error": str(exc), "filename": filename},
+            422,
+        )
+
+    # ── 9. Success response ────────────────────────────────────────────────────────
     terrain["crs"] = crs_info
     return (
         {
@@ -122,7 +138,13 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
                 "elevation_max": dem_result["elevation_max"],
                 "bounds":        dem_result["bounds"],
                 "saved_to":      os.path.basename(dem_save_path),
+                "slope": {
+                    "slope_min_deg":  slope_result["slope_min"],
+                    "slope_max_deg":  slope_result["slope_max"],
+                    "slope_mean_deg": slope_result["slope_mean"],
+                },
             },
+            "pond_site": candidate["pond_site"],
         },
         200,
     )

@@ -69,6 +69,12 @@ def test_valid_kml_upload(client):
     assert dem["resolution_m"] > 0
     assert len(dem["shape"]) == 2
     assert dem["nan_fraction"] == 0.0
+    assert "slope" in dem
+    # Pond site block
+    assert "pond_site" in body
+    site = body["pond_site"]
+    assert "latitude" in site and "longitude" in site
+    assert "elevation_m" in site and "slope_deg" in site
 
 
 # ── Error-path tests ────────────────────────────────────────────────────────
