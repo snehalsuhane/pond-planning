@@ -9,3 +9,5 @@ uploads/*
 dist/
 build/
 .pytest_cache/
+*.kml
+*.png

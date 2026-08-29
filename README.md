@@ -13,20 +13,23 @@ pond-planning/
 ├── routes/
 │   └── contour.py              # Blueprint: POST /api/analyzeContour
 ├── services/
-│   └── contour_service.py      # Upload pipeline (validate → save → parse → analyse → project)
+│   └── contour_service.py      # Full upload pipeline
 ├── analysis/
-│   ├── terrain.py              # Contour validation & terrain metadata ✅
+│   ├── terrain.py              # Contour validation & terrain metadata
+│   ├── dem.py                  # DEM generation from projected contours
 │   └── catchment.py            # Catchment / runoff analysis (stub)
 ├── utils/
-│   ├── kml_parser.py           # KML/KMZ parser ✅
-│   └── projection.py           # Coordinate projection (lon/lat → metres) ✅
+│   ├── kml_parser.py           # KML/KMZ parser
+│   └── projection.py           # Coordinate projection (lon/lat → metres)
 ├── tests/
 │   ├── test_contour_route.py   # HTTP layer integration tests
 │   ├── test_kml_parser.py      # KML/KMZ parser unit tests
 │   ├── test_terrain.py         # Terrain analysis unit tests
-│   └── test_projection.py      # Coordinate projection unit tests
-├── verify_kml.py               # Manual verification CLI tool ✅
-├── uploads/                    # Uploaded files (git-ignored)
+│   ├── test_projection.py      # Coordinate projection unit tests
+│   └── test_dem.py             # DEM generation unit tests
+├── verify_kml.py               # Manual KML + terrain verification CLI
+├── visualize_dem.py            # DEM visualization CLI (outputs PNG)
+├── uploads/                    # Uploaded files + generated .npy DEMs
 ├── requirements.txt
 └── README.md
 ```
@@ -88,6 +91,16 @@ The API will be available at `http://localhost:5000`.
 - The chosen CRS (EPSG code, name, unit) is returned alongside the projected data and included in the API response
 - Projected coordinates are used internally by the pipeline for metric calculations; only the CRS metadata is returned in the API response
 
+### DEM Generation — `analysis/dem.py`
+- Converts projected contour lines into a **continuous elevation surface** on a regular grid
+- Extracts all `(X, Y, elevation)` scatter points from contour line vertices
+- **Linear interpolation** (`scipy.griddata`) fills the grid inside the convex hull of the input data
+- **Nearest-neighbour fill** covers edge/corner regions outside the convex hull, ensuring zero NaN cells
+- Grid resolution is **auto-derived** from the data extent (~500 cells along the longest axis) and snapped to the contour interval — no hardcoded values
+- Resolution can also be specified explicitly for finer or coarser grids
+- The DEM array is saved as a `.npy` file in `uploads/` alongside the source KML for use by downstream analysis steps
+- Returns grid metadata (shape, resolution, bounds, NaN fraction, elevation range) in the API response
+
 ---
 
 ## Processing Pipeline
@@ -95,15 +108,15 @@ The API will be available at `http://localhost:5000`.
 ```
 Upload (KML/KMZ)
       ↓
-[utils/kml_parser.py]  →  list of contours  {id, elevation, coordinates: [[lon, lat]]}
+[utils/kml_parser.py]   →  list of contours  {id, elevation, coordinates: [[lon, lat]]}
       ↓
-[analysis/terrain.py]  →  validate + extract terrain metadata
+[analysis/terrain.py]   →  validate + extract terrain metadata
       ↓
-[utils/projection.py]  →  add projected_coordinates: [[X_m, Y_m]]  (UTM auto-selected)
+[utils/projection.py]   →  add projected_coordinates: [[X_m, Y_m]]  (UTM auto-selected)
       ↓
-API response with terrain metadata + CRS
+[analysis/dem.py]       →  interpolate regular elevation grid (DEM), save as .npy
       ↓
-[Next] DEM generation  →  regular grid in projected space
+API response: terrain metadata + CRS info + DEM metadata
       ↓
 [Next] Slope + flow direction
       ↓
@@ -138,17 +151,17 @@ data, projects coordinates, and returns a structured metadata response.
     "contour_interval_m": 1.0,
     "contour_interval_uniform": true,
     "total_points": 159113,
-    "bounds": {
-      "min_lon": 81.2814044952393,
-      "min_lat": 21.2398224433387,
-      "max_lon": 81.3126468658447,
-      "max_lat": 21.2635806472203
-    },
-    "crs": {
-      "epsg": 32644,
-      "name": "WGS 84 / UTM zone 44N",
-      "unit": "metre"
-    }
+    "bounds": { "min_lon": 81.28, "min_lat": 21.24, "max_lon": 81.31, "max_lat": 21.26 },
+    "crs": { "epsg": 32644, "name": "WGS 84 / UTM zone 44N", "unit": "metre" }
+  },
+  "dem": {
+    "resolution_m": 6.0,
+    "shape": [430, 312],
+    "nan_fraction": 0.0,
+    "elevation_min": 267.0,
+    "elevation_max": 298.0,
+    "bounds": { "min_x": 360241.5, "min_y": 2349822.4, "max_x": 363121.6, "max_y": 2352406.1 },
+    "saved_to": "contours_1m_dem.npy"
   }
 }
 ```
@@ -176,7 +189,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-85 tests across 4 test modules — all passing.
+113 tests across 5 test modules — all passing.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -184,19 +197,28 @@ python -m pytest tests/ -v
 | `test_kml_parser.py` | 20 | KML/KMZ parsing, namespaces, edge cases |
 | `test_terrain.py` | 27 | Stats, interval logic, bounds, all validation errors |
 | `test_projection.py` | 33 | UTM zone selection, coordinate projection, pipeline |
+| `test_dem.py` | 28 | DEM structure, dimensions, elevation range, NaN, reusability |
 
 ---
 
 ## Manual Verification
 
-To test the full pipeline against your own KML file:
+To parse and validate a KML file:
 
 ```bash
 python verify_kml.py /path/to/your/file.kml
 ```
 
-Prints terrain metadata, CRS info, a projected spot-check, and saves
-the full contour list to `parsed_output.json`.
+To generate and visually validate the DEM:
+
+```bash
+python visualize_dem.py /path/to/your/file.kml
+# outputs: dem_visualization.png
+```
+
+The PNG shows a side-by-side view of the interpolated elevation surface and a
+contour map reconstructed from the DEM — use it to confirm the terrain looks correct
+before running slope/flow/catchment calculations.
 
 ---
 
@@ -206,6 +228,7 @@ the full contour list to `parsed_output.json`.
 - [x] KML/KMZ parser (`utils/kml_parser.py`)
 - [x] Terrain validation & metadata (`analysis/terrain.py`)
 - [x] Coordinate projection to UTM metres (`utils/projection.py`)
-- [ ] DEM generation from projected contour data
+- [x] DEM generation from projected contour data (`analysis/dem.py`)
+- [ ] Slope and flow direction from DEM
 - [ ] `analysis/catchment.py` — catchment area, runoff coefficient, water yield
 - [ ] Pond site suitability scoring

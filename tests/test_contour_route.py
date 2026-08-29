@@ -62,6 +62,13 @@ def test_valid_kml_upload(client):
     assert "max_elevation_m" in terrain
     assert "total_points" in terrain
     assert "bounds" in terrain
+    assert "crs" in terrain
+    # DEM metadata block
+    assert "dem" in body
+    dem = body["dem"]
+    assert dem["resolution_m"] > 0
+    assert len(dem["shape"]) == 2
+    assert dem["nan_fraction"] == 0.0
 
 
 # ── Error-path tests ────────────────────────────────────────────────────────
