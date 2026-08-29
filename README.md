@@ -9,27 +9,34 @@ in planning and sizing village ponds.
 
 ```
 pond-planning/
-├── app.py                      # App factory & entry point
+├── app.py
 ├── routes/
-│   └── contour.py              # Blueprint: POST /api/analyzeContour
+│   └── contour.py
 ├── services/
-│   └── contour_service.py      # Full upload pipeline
+│   └── contour_service.py
 ├── analysis/
-│   ├── terrain.py              # Contour validation & terrain metadata
-│   ├── dem.py                  # DEM generation from projected contours
-│   └── catchment.py            # Catchment / runoff analysis (stub)
+│   ├── terrain.py              # Contour validation, metadata, slope
+│   ├── dem.py                  # DEM generation
+│   ├── pond.py                 # Pond candidate identification
+│   ├── hydrology.py            # D8 flow direction, accumulation, channels
+│   └── catchment.py            # Catchment / runoff (stub)
 ├── utils/
-│   ├── kml_parser.py           # KML/KMZ parser
-│   └── projection.py           # Coordinate projection (lon/lat → metres)
+│   ├── kml_parser.py
+│   └── projection.py
 ├── tests/
-│   ├── test_contour_route.py   # HTTP layer integration tests
-│   ├── test_kml_parser.py      # KML/KMZ parser unit tests
-│   ├── test_terrain.py         # Terrain analysis unit tests
-│   ├── test_projection.py      # Coordinate projection unit tests
-│   └── test_dem.py             # DEM generation unit tests
-├── verify_kml.py               # Manual KML + terrain verification CLI
-├── visualize_dem.py            # DEM visualization CLI (outputs PNG)
-├── uploads/                    # Uploaded files + generated .npy DEMs
+│   ├── test_contour_route.py
+│   ├── test_kml_parser.py
+│   ├── test_terrain.py
+│   ├── test_projection.py
+│   ├── test_dem.py
+│   ├── test_pond.py
+│   └── test_hydrology.py
+├── scripts/
+│   ├── verify_kml.py
+│   ├── visualize_dem.py
+│   ├── visualize_pond.py
+│   └── visualize_hydrology.py  # DEM + flow accumulation + channel network
+├── uploads/
 ├── requirements.txt
 └── README.md
 ```
@@ -110,6 +117,13 @@ The API will be available at `http://localhost:5000`.
 - The best-scoring cell's projected (X, Y) coordinates are back-projected to geographic (lat, lon)
 - Selection weights and slope threshold are configurable — no coordinates are hardcoded
 
+### Flow Direction, Accumulation & Channels — `analysis/hydrology.py`
+- Implements the **D8 (deterministic 8-direction)** algorithm: each cell is directed toward the steepest of its 8 neighbours
+- ArcGIS-standard direction codes (E=1, SE=2, S=4, SW=8, W=16, NW=32, N=64, NE=128); code 0 = pit/flat cell
+- Slope computation is **fully vectorised** using numpy array slicing over a padded DEM
+- **Flow accumulation** is computed via topological sort (BFS from headwater cells): each cell receives the sum of all upstream cells' values — conserves total flow count
+- **Channel detection**: a configurable threshold selects high-accumulation cells as the drainage network; default is the 99th percentile (top 1 % of cells)
+
 ---
 
 ## Processing Pipeline
@@ -117,19 +131,21 @@ The API will be available at `http://localhost:5000`.
 ```
 Upload (KML/KMZ)
       ↓
-[utils/kml_parser.py]   →  list of contours  {id, elevation, coordinates: [[lon, lat]]}
+[utils/kml_parser.py]   →  list of contours
       ↓
-[analysis/terrain.py]   →  validate + extract terrain metadata
+[analysis/terrain.py]   →  validate + terrain metadata
       ↓
-[utils/projection.py]   →  add projected_coordinates: [[X_m, Y_m]]  (UTM auto-selected)
+[utils/projection.py]   →  projected_coordinates in metres (UTM auto-selected)
       ↓
-[analysis/dem.py]       →  interpolate regular elevation grid (DEM), save as .npy
+[analysis/dem.py]       →  interpolated elevation grid, saved as .npy
       ↓
-[analysis/terrain.py]   →  calculate slope for each DEM cell
+[analysis/terrain.py]   →  slope per cell
       ↓
-[analysis/pond.py]      →  score cells, apply masks, select best candidate
+[analysis/pond.py]      →  pond candidate (score + back-project)
       ↓
-API response: terrain + CRS + DEM + slope summary + pond_site
+[analysis/hydrology.py] →  D8 flow direction → flow accumulation → channel mask
+      ↓
+API response: terrain + DEM + pond_site + hydrology
       ↓
 [Next] Catchment area delineation
 ```
@@ -155,37 +171,24 @@ data, projects coordinates, and returns a structured metadata response.
 {
   "status": "success",
   "filename": "contours_1m.kml",
-  "terrain": {
-    "contour_count": 1355,
-    "min_elevation_m": 267.0,
-    "max_elevation_m": 298.0,
-    "contour_interval_m": 1.0,
-    "contour_interval_uniform": true,
-    "total_points": 159113,
-    "bounds": { "min_lon": 81.28, "min_lat": 21.24, "max_lon": 81.31, "max_lat": 21.26 },
-    "crs": { "epsg": 32644, "name": "WGS 84 / UTM zone 44N", "unit": "metre" }
-  },
+  "terrain": { "..." : "..." },
   "dem": {
-    "resolution_m": 6.0,
-    "shape": [430, 312],
-    "nan_fraction": 0.0,
-    "elevation_min": 267.0,
-    "elevation_max": 298.0,
-    "bounds": { "min_x": 360241.5, "min_y": 2349822.4, "max_x": 363121.6, "max_y": 2352406.1 },
+    "resolution_m": 6.0, "shape": [430, 312], "nan_fraction": 0.0,
+    "elevation_min": 267.0, "elevation_max": 298.0,
     "saved_to": "contours_1m_dem.npy",
-    "slope": {
-      "slope_min_deg": 0.0,
-      "slope_max_deg": 18.4,
-      "slope_mean_deg": 3.2
-    }
+    "slope": { "slope_min_deg": 0.0, "slope_max_deg": 18.4, "slope_mean_deg": 3.2 }
   },
   "pond_site": {
-    "latitude": 21.23982,
-    "longitude": 81.29134,
-    "elevation_m": 267.0,
-    "slope_deg": 1.4,
-    "grid_row": 2,
-    "grid_col": 47
+    "latitude": 21.23982, "longitude": 81.29134,
+    "elevation_m": 267.0, "slope_deg": 1.4, "grid_row": 2, "grid_col": 47
+  },
+  "hydrology": {
+    "noflow_count": 12,
+    "acc_max": 8431.0,
+    "acc_mean": 142.3,
+    "channel_threshold": 4218.0,
+    "channel_cell_count": 1345,
+    "channel_fraction": 0.0073
   }
 }
 ```
@@ -213,7 +216,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-135 tests across 6 test modules — all passing.
+167 tests across 7 test modules — all passing.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -223,6 +226,7 @@ python -m pytest tests/ -v
 | `test_projection.py` | 33 | UTM zone selection, coordinate projection, pipeline |
 | `test_dem.py` | 28 | DEM structure, dimensions, elevation range, NaN, reusability |
 | `test_pond.py` | 22 | Slope values, candidate structure, bounds, data-independence |
+| `test_hydrology.py` | 35 | D8 direction codes, ramp/bowl tests, accumulation, channels |
 
 ---
 
@@ -241,11 +245,11 @@ python scripts/visualize_dem.py /path/to/your/file.kml
 # outputs: dem_visualization.png
 ```
 
-To visualize terrain + slope + pond candidate (recommended after any change):
+To visualize flow accumulation + channel network:
 
 ```bash
-python scripts/visualize_pond.py /path/to/your/file.kml
-# outputs: pond_candidate.png  (3-panel: DEM, slope map, zoomed candidate view)
+python scripts/visualize_hydrology.py /path/to/your/file.kml
+# outputs: hydrology.png  (DEM | log-accumulation | channel network)
 ```
 
 ---
@@ -259,5 +263,6 @@ python scripts/visualize_pond.py /path/to/your/file.kml
 - [x] DEM generation from projected contour data (`analysis/dem.py`)
 - [x] Slope calculation from DEM (`analysis/terrain.py`)
 - [x] Pond candidate identification (`analysis/pond.py`)
+- [x] D8 flow direction, flow accumulation, channel detection (`analysis/hydrology.py`)
 - [ ] Catchment area delineation (`analysis/catchment.py`)
 - [ ] Water yield estimation

@@ -1,10 +1,8 @@
 """
 Service: contour_service
 
-Handles business logic for the /api/analyzeContour endpoint.
-
 Pipeline:
-  1. Validate file extension
+  1. Validate extension
   2. Save to uploads/
   3. Parse KML/KMZ       →  utils.kml_parser.parse()
   4. Validate & analyse  →  analysis.terrain.analyze_contours()
@@ -12,7 +10,8 @@ Pipeline:
   6. Generate DEM        →  analysis.dem.generate_dem()
   7. Calculate slope     →  analysis.terrain.calculate_slope()
   8. Find pond candidate →  analysis.pond.find_pond_candidate()
-  9. Return structured JSON response
+  9. Run hydrology       →  analysis.hydrology.run_hydrology()
+ 10. Return JSON response
 """
 
 import os
@@ -24,6 +23,7 @@ from utils.projection import project_contours
 from analysis.terrain import analyze_contours, TerrainValidationError, calculate_slope
 from analysis.dem import generate_dem, DEMGenerationError
 from analysis.pond import find_pond_candidate, PondCandidateError
+from analysis.hydrology import run_hydrology
 
 
 def _allowed_extension(filename: str, allowed_extensions: set) -> bool:
@@ -122,8 +122,10 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
             {"status": "error", "error": str(exc), "filename": filename},
             422,
         )
+    # ── 9. Hydrology ─────────────────────────────────────────────────────────
+    hydro = run_hydrology(dem_result)
 
-    # ── 9. Success response ────────────────────────────────────────────────────────
+    # ── 10. Success response ──────────────────────────────────────────────────
     terrain["crs"] = crs_info
     return (
         {
@@ -145,6 +147,14 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
                 },
             },
             "pond_site": candidate["pond_site"],
+            "hydrology": {
+                "noflow_count":       hydro["noflow_count"],
+                "acc_max":            hydro["acc_max"],
+                "acc_mean":           round(hydro["acc_mean"], 2),
+                "channel_threshold":  hydro["channel_threshold"],
+                "channel_cell_count": hydro["channel_cell_count"],
+                "channel_fraction":   round(hydro["channel_fraction"], 4),
+            },
         },
         200,
     )
