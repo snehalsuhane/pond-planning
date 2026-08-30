@@ -9,6 +9,9 @@ Outputs:
 """
 
 import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import matplotlib
 matplotlib.use("Agg")   # headless — no display required
 import matplotlib.pyplot as plt

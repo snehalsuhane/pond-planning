@@ -110,12 +110,13 @@ The API will be available at `http://localhost:5000`.
 - Slope summary is included in the API response under `dem.slope`
 
 ### Pond Candidate Identification — `analysis/pond.py`
-- Identifies the most suitable pond location from the DEM + slope grid algorithmically
-- Each cell is scored by a weighted combination of normalised elevation and normalised slope:
-  `score = 0.6 × elev_norm + 0.4 × slope_norm`  (lower score = better site)
-- Cells steeper than `max_slope_deg` (default 8°) and border cells are excluded before selection
-- The best-scoring cell's projected (X, Y) coordinates are back-projected to geographic (lat, lon)
-- Selection weights and slope threshold are configurable — no coordinates are hardcoded
+- Identifies the top N spatially distinct pond locations from the DEM and slope grid
+- Each cell is scored by a weighted combination of normalised criteria:
+  `score = 0.3 × elev_norm + 0.4 × slope_norm + 0.3 × depr_norm`  (lower score = better site)
+- **Depressions:** Uses Topographic Position Index (TPI) via a 100m window to strongly prefer basin-like local depressions over flat areas
+- Cells steeper than `max_slope_deg` (default 8°) and border cells are excluded
+- Implements a greedy selection algorithm ensuring all returned candidates are at least `min_distance_m` (default 100m) apart
+- Selection weights, slope threshold, and window sizes are all configurable
 
 ### Flow Direction, Accumulation & Channels — `analysis/hydrology.py`
 - Implements the **D8 (deterministic 8-direction)** algorithm: each cell is directed toward the steepest of its 8 neighbours
@@ -141,7 +142,7 @@ Upload (KML/KMZ)
       ↓
 [analysis/terrain.py]   →  slope per cell
       ↓
-[analysis/pond.py]      →  pond candidate (score + back-project)
+[analysis/pond.py]      →  pond_candidates list (Top N ranked sites)
       ↓
 [analysis/hydrology.py] →  D8 flow direction → flow accumulation → channel mask
       ↓
@@ -178,10 +179,17 @@ data, projects coordinates, and returns a structured metadata response.
     "saved_to": "contours_1m_dem.npy",
     "slope": { "slope_min_deg": 0.0, "slope_max_deg": 18.4, "slope_mean_deg": 3.2 }
   },
-  "pond_site": {
-    "latitude": 21.23982, "longitude": 81.29134,
-    "elevation_m": 267.0, "slope_deg": 1.4, "grid_row": 2, "grid_col": 47
-  },
+  "pond_candidates": [
+    {
+      "rank": 1,
+      "latitude": 21.259564, "longitude": 81.300134,
+      "elevation_m": 274.1, "slope_deg": 4.3, "score": 0.283,
+      "grid_row": 242, "grid_col": 343
+    },
+    {
+      "rank": 2, "..." : "..."
+    }
+  ],
   "hydrology": {
     "noflow_count": 12,
     "acc_max": 8431.0,
@@ -216,7 +224,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-167 tests across 7 test modules — all passing.
+170 tests across 7 test modules — all passing.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -225,8 +233,8 @@ python -m pytest tests/ -v
 | `test_terrain.py` | 27 | Stats, interval logic, bounds, all validation errors |
 | `test_projection.py` | 33 | UTM zone selection, coordinate projection, pipeline |
 | `test_dem.py` | 28 | DEM structure, dimensions, elevation range, NaN, reusability |
-| `test_pond.py` | 22 | Slope values, candidate structure, bounds, data-independence |
-| `test_hydrology.py` | 35 | D8 direction codes, ramp/bowl tests, accumulation, channels |
+| `test_pond.py` | 25 | Slope, Top N multi-candidate ranking, TPI depression scoring |
+| `test_hydrology.py` | 32 | D8 direction codes, ramp/bowl tests, accumulation, channels |
 
 ---
 

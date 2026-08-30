@@ -15,6 +15,9 @@ What it does:
 """
 
 import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import json
 from utils.kml_parser import parse, KMLParseError
 from analysis.terrain import analyze_contours, TerrainValidationError

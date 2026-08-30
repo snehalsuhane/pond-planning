@@ -11,8 +11,9 @@ import pytest
 import numpy as np
 
 from analysis.terrain import calculate_slope
-from analysis.pond import find_pond_candidate, PondCandidateError
+from analysis.pond import find_pond_candidate, rank_pond_candidates, PondCandidateError
 from analysis.dem import generate_dem
+from analysis.hydrology import run_hydrology
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +89,11 @@ def dome_slope(dome_dem):
     return calculate_slope(dome_dem)
 
 
+@pytest.fixture(scope="module")
+def dome_hydro(dome_dem):
+    return run_hydrology(dome_dem)
+
+
 # ---------------------------------------------------------------------------
 # calculate_slope tests
 # ---------------------------------------------------------------------------
@@ -158,7 +164,7 @@ class TestFindPondCandidate:
     def test_pond_site_has_all_keys(self, dome_dem, dome_slope):
         site = find_pond_candidate(dome_dem, dome_slope, EPSG)["pond_site"]
         expected = {"latitude", "longitude", "elevation_m", "slope_deg",
-                    "grid_row", "grid_col"}
+                    "grid_row", "grid_col", "score", "rank"}
         assert expected.issubset(site.keys())
 
     def test_latitude_is_numeric(self, dome_dem, dome_slope):
@@ -229,3 +235,64 @@ class TestFindPondCandidate:
         }
         with pytest.raises(PondCandidateError):
             find_pond_candidate(steep_dem, steep_slope, EPSG, max_slope_deg=5.0)
+
+
+# ---------------------------------------------------------------------------
+# rank_pond_candidates tests
+# ---------------------------------------------------------------------------
+
+class TestRankPondCandidates:
+
+    def test_returns_top_n_candidates(self, dome_dem, dome_slope):
+        result = rank_pond_candidates(dome_dem, dome_slope, EPSG, num_candidates=3)
+        assert "pond_candidates" in result
+        candidates = result["pond_candidates"]
+        assert len(candidates) == 3
+        # Ensure ranks are 1, 2, 3
+        ranks = [c["rank"] for c in candidates]
+        assert ranks == [1, 2, 3]
+        
+    def test_candidates_are_spatially_distinct(self, dome_dem, dome_slope):
+        result = rank_pond_candidates(dome_dem, dome_slope, EPSG, num_candidates=2, min_distance_m=50.0)
+        c1, c2 = result["pond_candidates"]
+        
+        # Calculate pixel distance
+        dr = c1["grid_row"] - c2["grid_row"]
+        dc = c1["grid_col"] - c2["grid_col"]
+        dist_px = math.sqrt(dr**2 + dc**2)
+        dist_m = dist_px * dome_dem["resolution_m"]
+        assert dist_m >= 50.0
+
+    def test_depression_preferred(self):
+        """A local depression (basin) should be preferred over a flat area of the same elevation."""
+        from analysis.terrain import calculate_slope
+        from analysis.pond import rank_pond_candidates
+        import numpy as np
+
+        # Create a flat DEM at elevation 10.0
+        res = 5.0
+        dem = np.full((30, 30), 10.0)
+        # Create a basin in the middle (elevation 5.0)
+        dem[10:20, 10:20] = 5.0
+        # The center of the basin (15, 15) is fully flat and lowest.
+        # Let's create a second flat area at elevation 5.0 but on the edge, so it is NOT a basin
+        dem[0:5, 0:5] = 5.0
+
+        dem_result = {
+            "dem": dem,
+            "x_coords": np.arange(30) * res,
+            "y_coords": np.arange(30) * res,
+            "resolution_m": res,
+            "shape": dem.shape,
+            "bounds": {"min_x": 0, "max_x": 150, "min_y": 0, "max_y": 150}
+        }
+        slope_result = calculate_slope(dem_result)
+        
+        # Rank candidates. The basin center should be ranked #1
+        EPSG = 32644
+        candidates = rank_pond_candidates(dem_result, slope_result, EPSG, num_candidates=2)["pond_candidates"]
+        
+        # Candidate 1 should be inside the basin (row, col near 15)
+        c1 = candidates[0]
+        assert 10 <= c1["grid_row"] < 20
+        assert 10 <= c1["grid_col"] < 20

@@ -9,8 +9,8 @@ Pipeline:
   5. Project coordinates →  utils.projection.project_contours()
   6. Generate DEM        →  analysis.dem.generate_dem()
   7. Calculate slope     →  analysis.terrain.calculate_slope()
-  8. Find pond candidate →  analysis.pond.find_pond_candidate()
-  9. Run hydrology       →  analysis.hydrology.run_hydrology()
+  8. Run hydrology       →  analysis.hydrology.run_hydrology()
+  9. Rank pond candidates→  analysis.pond.rank_pond_candidates()
  10. Return JSON response
 """
 
@@ -22,7 +22,7 @@ from utils.kml_parser import parse, KMLParseError
 from utils.projection import project_contours
 from analysis.terrain import analyze_contours, TerrainValidationError, calculate_slope
 from analysis.dem import generate_dem, DEMGenerationError
-from analysis.pond import find_pond_candidate, PondCandidateError
+from analysis.pond import rank_pond_candidates, PondCandidateError
 from analysis.hydrology import run_hydrology
 
 
@@ -113,17 +113,18 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
     # ── 7. Slope ──────────────────────────────────────────────────────────────────
     slope_result = calculate_slope(dem_result)
 
-    # ── 8. Pond candidate ─────────────────────────────────────────────────────────
+    # ── 8. Hydrology ─────────────────────────────────────────────────────────
+    hydro = run_hydrology(dem_result)
+
+    # ── 9. Pond candidates ───────────────────────────────────────────────────
     epsg = crs_info["epsg"]
     try:
-        candidate = find_pond_candidate(dem_result, slope_result, epsg)
+        candidates = rank_pond_candidates(dem_result, slope_result, epsg)
     except PondCandidateError as exc:
         return (
             {"status": "error", "error": str(exc), "filename": filename},
             422,
         )
-    # ── 9. Hydrology ─────────────────────────────────────────────────────────
-    hydro = run_hydrology(dem_result)
 
     # ── 10. Success response ──────────────────────────────────────────────────
     terrain["crs"] = crs_info
@@ -146,7 +147,7 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
                     "slope_mean_deg": slope_result["slope_mean"],
                 },
             },
-            "pond_site": candidate["pond_site"],
+            "pond_candidates": candidates["pond_candidates"],
             "hydrology": {
                 "noflow_count":       hydro["noflow_count"],
                 "acc_max":            hydro["acc_max"],
