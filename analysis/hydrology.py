@@ -3,6 +3,10 @@ Analysis: hydrology
 
 D8 flow direction, flow accumulation, and drainage channel detection.
 
+Note: This module currently operates as an independent component. It provides 
+valuable terrain metadata and lays the groundwork for future catchment delineation, 
+but is intentionally decoupled from the core pond candidate scoring algorithm.
+
 Public API
 ----------
 calculate_flow_direction(dem_result)    -> dict

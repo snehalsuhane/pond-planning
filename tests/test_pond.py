@@ -164,8 +164,9 @@ class TestFindPondCandidate:
     def test_pond_site_has_all_keys(self, dome_dem, dome_slope):
         site = find_pond_candidate(dome_dem, dome_slope, EPSG)["pond_site"]
         expected = {"latitude", "longitude", "elevation_m", "slope_deg",
-                    "grid_row", "grid_col", "score", "rank"}
+                    "grid_row", "grid_col", "score", "rank", "tpi", "criteria"}
         assert expected.issubset(site.keys())
+        assert {"elevation_score", "slope_score", "depression_score"}.issubset(site["criteria"].keys())
 
     def test_latitude_is_numeric(self, dome_dem, dome_slope):
         site = find_pond_candidate(dome_dem, dome_slope, EPSG)["pond_site"]
