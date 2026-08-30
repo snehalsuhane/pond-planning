@@ -77,7 +77,18 @@ def test_valid_kml_upload(client):
     site = candidates[0]
     assert "latitude" in site and "longitude" in site
     assert "elevation_m" in site and "slope_deg" in site
-    assert "score" in site
+    assert "score" in site and "tpi" in site
+    assert "criteria" in site
+    assert "elevation_score" in site["criteria"]
+    
+    assert "catchment" in site
+    assert "area_m2" in site["catchment"]
+    assert "area_ha" in site["catchment"]
+    assert "area_km2" in site["catchment"]
+    assert "polygon" in site["catchment"]
+    assert "pour_point" in site["catchment"]
+    assert "latitude" in site["catchment"]["pour_point"]
+    assert "longitude" in site["catchment"]["pour_point"]
 
 
 # ── Error-path tests ────────────────────────────────────────────────────────

@@ -71,7 +71,15 @@ def _build_score(dem: np.ndarray, slope: np.ndarray, res: float,
     else:
         depr_norm = np.ones_like(dem)
 
-    return elev_weight * elev_norm + slope_weight * slope_norm + depr_weight * depr_norm
+    total_score = elev_weight * elev_norm + slope_weight * slope_norm + depr_weight * depr_norm
+
+    return {
+        "total_score": total_score,
+        "elev_norm": elev_norm,
+        "slope_norm": slope_norm,
+        "depr_norm": depr_norm,
+        "tpi": tpi
+    }
 
 
 def _border_mask(shape: tuple, border: int) -> np.ndarray:
@@ -135,7 +143,8 @@ def rank_pond_candidates(
     slope    = slope_result["slope"]
 
     # ── Score grid ───────────────────────────────────────────────────────────
-    score = _build_score(dem, slope, res, elev_weight, slope_weight, depr_weight, depr_window_m)
+    score_data = _build_score(dem, slope, res, elev_weight, slope_weight, depr_weight, depr_window_m)
+    score = score_data["total_score"]
 
     # ── Exclusion masks ──────────────────────────────────────────────────────
     excluded  = slope > max_slope_deg
@@ -193,14 +202,19 @@ def rank_pond_candidates(
         proj_y = float(y_coords[row])
         lon, lat = transformer.transform(proj_x, proj_y)
         
-        # We can also compute TPI for output metadata if we want, but let's just stick to score
         candidates_list.append({
             "rank":              rank,
             "latitude":          round(float(lat), 7),
             "longitude":         round(float(lon), 7),
             "elevation_m":       round(float(dem[row, col]),  2),
             "slope_deg":         round(float(slope[row, col]), 2),
+            "tpi":               round(float(score_data["tpi"][row, col]), 2),
             "score":             round(cell_score, 3),
+            "criteria": {
+                "elevation_score":  round(float(score_data["elev_norm"][row, col] * elev_weight), 3),
+                "slope_score":      round(float(score_data["slope_norm"][row, col] * slope_weight), 3),
+                "depression_score": round(float(score_data["depr_norm"][row, col] * depr_weight), 3),
+            },
             "grid_row":          row,
             "grid_col":          col,
         })

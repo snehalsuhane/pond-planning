@@ -19,7 +19,7 @@ pond-planning/
 │   ├── dem.py                  # DEM generation
 │   ├── pond.py                 # Pond candidate identification
 │   ├── hydrology.py            # D8 flow direction, accumulation, channels
-│   └── catchment.py            # Catchment / runoff (stub)
+│   ├── catchment.py            # D8 catchment delineation & vectorization
 ├── utils/
 │   ├── kml_parser.py
 │   └── projection.py
@@ -119,11 +119,19 @@ The API will be available at `http://localhost:5000`.
 - Selection weights, slope threshold, and window sizes are all configurable
 
 ### Flow Direction, Accumulation & Channels — `analysis/hydrology.py`
+- **Independent Component:** Currently operates independently from pond scoring to provide structural terrain metadata and lay groundwork for future catchment delineation.
 - Implements the **D8 (deterministic 8-direction)** algorithm: each cell is directed toward the steepest of its 8 neighbours
 - ArcGIS-standard direction codes (E=1, SE=2, S=4, SW=8, W=16, NW=32, N=64, NE=128); code 0 = pit/flat cell
 - Slope computation is **fully vectorised** using numpy array slicing over a padded DEM
 - **Flow accumulation** is computed via topological sort (BFS from headwater cells): each cell receives the sum of all upstream cells' values — conserves total flow count
 - **Channel detection**: a configurable threshold selects high-accumulation cells as the drainage network; default is the 99th percentile (top 1 % of cells)
+
+### Catchment Delineation — `analysis/catchment.py`
+- Determines the exact upstream catchment area for a selected pour point (pond candidate)
+- Uses a Breadth-First Search to recursively trace D8 flow directions backwards
+- Produces a boolean raster mask of the catchment
+- Converts the raster mask into a clean geographic polygon `[lon, lat]` using `contourpy`
+- Computes total catchment area in square metres (`area_m2`), hectares (`area_ha`), and square kilometres (`area_km2`)
 
 ---
 
@@ -146,7 +154,9 @@ Upload (KML/KMZ)
       ↓
 [analysis/hydrology.py] →  D8 flow direction → flow accumulation → channel mask
       ↓
-API response: terrain + DEM + pond_site + hydrology
+[analysis/catchment.py] →  catchment polygon and area for all candidates
+      ↓
+API response: terrain + DEM + pond_candidates + hydrology
       ↓
 [Next] Catchment area delineation
 ```
@@ -183,8 +193,25 @@ data, projects coordinates, and returns a structured metadata response.
     {
       "rank": 1,
       "latitude": 21.259564, "longitude": 81.300134,
-      "elevation_m": 274.1, "slope_deg": 4.3, "score": 0.283,
-      "grid_row": 242, "grid_col": 343
+      "elevation_m": 274.1, "slope_deg": 4.3, "tpi": -4.8, "score": 0.283,
+      "criteria": {
+        "elevation_score": 0.18,
+        "slope_score": 0.11,
+        "depression_score": 0.32
+      },
+      "grid_row": 242, "grid_col": 343,
+      "catchment": {
+        "pour_point": {
+          "latitude": 21.259564,
+          "longitude": 81.300134
+        },
+        "area_m2": 24300.0,
+        "area_ha": 2.43,
+        "area_km2": 0.0243,
+        "polygon": [
+          [81.2995, 21.2601], [81.3005, 21.2605], [81.3012, 21.2592]
+        ]
+      }
     },
     {
       "rank": 2, "..." : "..."
@@ -224,7 +251,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-170 tests across 7 test modules — all passing.
+174 tests across 7 test modules — all passing.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -235,6 +262,7 @@ python -m pytest tests/ -v
 | `test_dem.py` | 28 | DEM structure, dimensions, elevation range, NaN, reusability |
 | `test_pond.py` | 25 | Slope, Top N multi-candidate ranking, TPI depression scoring |
 | `test_hydrology.py` | 32 | D8 direction codes, ramp/bowl tests, accumulation, channels |
+| `test_catchment.py` | 4 | D8 upstream tracing, raster mask, area units, boundary checks |
 
 ---
 
@@ -260,6 +288,20 @@ python scripts/visualize_hydrology.py /path/to/your/file.kml
 # outputs: hydrology.png  (DEM | log-accumulation | channel network)
 ```
 
+To visualize the top 10 pond candidates:
+
+```bash
+python scripts/visualize_pond.py /path/to/your/file.kml
+# outputs: pond_candidates.png
+```
+
+To visualize the delineated catchment areas for all 10 candidates:
+
+```bash
+PYTHONPATH=. python scripts/visualize_catchment.py /path/to/your/file.kml
+# outputs: catchment_visualization.png
+```
+
 ---
 
 ## Roadmap
@@ -272,5 +314,4 @@ python scripts/visualize_hydrology.py /path/to/your/file.kml
 - [x] Slope calculation from DEM (`analysis/terrain.py`)
 - [x] Pond candidate identification (`analysis/pond.py`)
 - [x] D8 flow direction, flow accumulation, channel detection (`analysis/hydrology.py`)
-- [ ] Catchment area delineation (`analysis/catchment.py`)
-- [ ] Water yield estimation
+- [x] Catchment area delineation (`analysis/catchment.py`)

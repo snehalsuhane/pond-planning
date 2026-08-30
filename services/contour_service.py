@@ -24,6 +24,7 @@ from analysis.terrain import analyze_contours, TerrainValidationError, calculate
 from analysis.dem import generate_dem, DEMGenerationError
 from analysis.pond import rank_pond_candidates, PondCandidateError
 from analysis.hydrology import run_hydrology
+from analysis.catchment import delineate_catchment
 
 
 def _allowed_extension(filename: str, allowed_extensions: set) -> bool:
@@ -126,7 +127,17 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
             422,
         )
 
-    # ── 10. Success response ──────────────────────────────────────────────────
+    # ── 10. Catchment for all candidates ─────────────────────────────────────
+    for candidate in candidates.get("pond_candidates", []):
+        pour_point = (candidate["grid_row"], candidate["grid_col"])
+        catchment = delineate_catchment(hydro, pour_point, dem_result, epsg)
+        catchment["pour_point"] = {
+            "latitude": candidate["latitude"],
+            "longitude": candidate["longitude"]
+        }
+        candidate["catchment"] = catchment
+
+    # ── 11. Success response ──────────────────────────────────────────────────
     terrain["crs"] = crs_info
     return (
         {
