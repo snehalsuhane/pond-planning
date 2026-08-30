@@ -120,6 +120,7 @@ The API will be available at `http://localhost:5000`.
 
 ### Flow Direction, Accumulation & Channels — `analysis/hydrology.py`
 - **Independent Component:** Currently operates independently from pond scoring to provide structural terrain metadata and lay groundwork for future catchment delineation.
+- **Independent Component:** Currently operates independently from pond scoring to provide structural terrain metadata and lay groundwork for future catchment delineation.
 - Implements the **D8 (deterministic 8-direction)** algorithm: each cell is directed toward the steepest of its 8 neighbours
 - ArcGIS-standard direction codes (E=1, SE=2, S=4, SW=8, W=16, NW=32, N=64, NE=128); code 0 = pit/flat cell
 - Slope computation is **fully vectorised** using numpy array slicing over a padded DEM
