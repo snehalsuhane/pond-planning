@@ -31,3 +31,5 @@ scratch/
 # Survey source files (large, kept local)
 *.kml
 *.kmz
+
+*.tex

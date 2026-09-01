@@ -79,7 +79,7 @@ def client(tmp_path):
 
 def test_valid_kml_upload(client):
     """A valid .kml file returns 200 with all expected top-level keys."""
-    data = {"file": (io.BytesIO(VALID_KML), "test_site.kml")}
+    data = {"contour_map": (io.BytesIO(VALID_KML), "test_site.kml")}
     response = client.post(
         "/api/analyzeContour",
         data=data,
@@ -127,7 +127,7 @@ def test_valid_kml_upload(client):
 
 
 def test_missing_file_field(client):
-    """Request without a 'file' field should return 400."""
+    """Request without a 'contour_map' field should return 400."""
     response = client.post("/api/analyzeContour", data={}, content_type="multipart/form-data")
     assert response.status_code == 400
     assert response.get_json()["success"] is False
@@ -135,7 +135,7 @@ def test_missing_file_field(client):
 
 def test_empty_filename(client):
     """Request with an empty filename should return 400."""
-    data = {"file": (io.BytesIO(b""), "")}
+    data = {"contour_map": (io.BytesIO(b""), "")}
     response = client.post(
         "/api/analyzeContour",
         data=data,
@@ -147,7 +147,7 @@ def test_empty_filename(client):
 
 def test_invalid_extension(client):
     """A non-KML/KMZ file should return 415."""
-    data = {"file": (io.BytesIO(b"data"), "report.pdf")}
+    data = {"contour_map": (io.BytesIO(b"data"), "report.pdf")}
     response = client.post(
         "/api/analyzeContour",
         data=data,
@@ -159,7 +159,7 @@ def test_invalid_extension(client):
 
 def test_malformed_kml_returns_422(client):
     """A .kml file with broken XML should return 422 Unprocessable Entity."""
-    data = {"file": (io.BytesIO(b"<kml><broken"), "bad.kml")}
+    data = {"contour_map": (io.BytesIO(b"<kml><broken"), "bad.kml")}
     response = client.post(
         "/api/analyzeContour",
         data=data,

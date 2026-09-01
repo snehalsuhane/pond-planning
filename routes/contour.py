@@ -1,9 +1,8 @@
 """
 Route: /api/analyzeContour
 
-Accepts a multipart/form-data POST with a KML or KMZ file.
-Currently: validates the file and returns its filename.
-Next steps: delegate to contour_service for terrain analysis.
+Accepts a multipart/form-data POST with a KML or KMZ file
+under the field name ``contour_map``.
 """
 
 from flask import Blueprint, request, current_app, jsonify
@@ -19,15 +18,15 @@ def analyze_contour():
     POST /api/analyzeContour
     ---
     Consumes:
-      - multipart/form-data (field: file)
+      - multipart/form-data (field: contour_map)
     Produces:
       - application/json
     """
     # ── 1. Check file field is present ─────────────────────────────────────
-    if "file" not in request.files:
-        return jsonify({"success": False, "error": "No file field in request."}), 400
+    if "contour_map" not in request.files:
+        return jsonify({"success": False, "error": "No 'contour_map' file field in request."}), 400
 
-    file = request.files["file"]
+    file = request.files["contour_map"]
 
     if file.filename == "":
         return jsonify({"success": False, "error": "No file selected."}), 400

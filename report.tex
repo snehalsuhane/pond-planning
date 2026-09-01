@@ -28,13 +28,13 @@
 \begin{titlepage}
 \centering\vspace*{2cm}
 {\Huge\bfseries Village Pond Planning System\par}\vspace{0.5cm}
-{\Large Phase 1: Contour Map Analysis \& Catchment Estimation\par}\vspace{2cm}
+{\Large Phase 2: Pond Catchment Analysis Backend\par}\vspace{2cm}
 {\large\bfseries Snehal Suhane\par}\vspace{0.3cm}
-{\normalsize September 2026\par}\vspace{2cm}
+{\large\bfseries 12342100\par}\vspace{0.3cm}
 \hrule\vspace{0.4cm}
 \begin{tabular}{ll}
 \textbf{GitHub:}&\url{https://github.com/snehalsuhane/pond-planning}\\[4pt]
-\textbf{API Base URL:}&\texttt{http://localhost:5000}\\[4pt]
+\textbf{API Base URL:}&\texttt{http://10.1.75.51:5273}\\[4pt]
 \textbf{Endpoint:}&\texttt{POST /api/analyzeContour}\\
 \end{tabular}
 \vspace{0.4cm}\hrule
@@ -43,26 +43,9 @@
 
 \section{Introduction}
 
-Rainwater harvesting through village farm ponds is one of the most cost-effective interventions for improving agricultural water security in rain-fed regions of India. Selecting a pond site manually from a contour map is time-consuming, subjective, and difficult to replicate. This project automates that process: given any contour map in KML or KMZ format, the system identifies the best pond locations and quantifies the catchment area that will supply each pond --- all without any hard-coded coordinates, region-specific parameters, or manual intervention.
+Rainwater harvesting through village farm ponds is one of the most cost-effective interventions for improving agricultural water security in rain-fed regions of India. Selecting a pond site manually from a contour map is time-consuming, subjective, and difficult to replicate. This project automates that process: given any contour map in KML or KMZ format, the system identifies the best pond locations and quantifies the catchment area that will supply each pond.
 
 The implementation is a \textbf{Flask REST API} backed by a modular Python analysis pipeline. Each module can be independently tested, configured, and extended. The key design principle throughout is \emph{generalisation}: every algorithm is parameterised by the input data, not by assumptions about the specific survey area.
-
-\section{GitHub Repository}
-
-\begin{center}
-\url{https://github.com/snehalsuhane/pond-planning}
-\end{center}
-
-The repository is fully self-contained:
-\begin{itemize}
-\item \textbf{\texttt{app.py}} --- Flask application factory and server entry point
-\item \textbf{\texttt{routes/contour.py}} --- HTTP route handler, file validation
-\item \textbf{\texttt{services/contour\_service.py}} --- Pipeline orchestration
-\item \textbf{\texttt{analysis/}} --- Terrain, DEM, hydrology, pond ranking, catchment
-\item \textbf{\texttt{utils/}} --- KML/KMZ parser, UTM projection
-\item \textbf{\texttt{scripts/}} --- Standalone visualisation tools
-\item \textbf{\texttt{tests/}} --- 178 unit and integration tests
-\end{itemize}
 
 \section{System Architecture \& Design Decisions}
 
@@ -71,78 +54,66 @@ The repository is fully self-contained:
 The full pipeline is stateless and driven entirely by the uploaded file:
 
 \begin{enumerate}
-\item \textbf{Parse} --- KML/KMZ $\rightarrow$ list of \texttt{\{elevation, coordinates\}} dicts
-\item \textbf{Terrain validation} --- elevation range, point density, geographic bounds
-\item \textbf{UTM projection} --- WGS84 $\rightarrow$ metres (auto-zone selection)
-\item \textbf{DEM interpolation} --- scattered contour points $\rightarrow$ regular elevation grid
-\item \textbf{Slope computation} --- gradient magnitude of the DEM
-\item \textbf{Hydrology} --- D8 flow direction $\rightarrow$ accumulation $\rightarrow$ channel mask
-\item \textbf{Pond candidate ranking} --- TPI multi-criteria scoring, greedy selection
-\item \textbf{Catchment delineation} --- BFS upstream trace on the D8 grid
-\item \textbf{Response} --- structured JSON
+\item \textbf{Parse}: KML/KMZ $\rightarrow$ list of \texttt{\{elevation, coordinates\}} dicts
+\item \textbf{Terrain validation}: elevation range, point density, geographic bounds
+\item \textbf{UTM projection}: WGS84 $\rightarrow$ metres (auto-zone selection)
+\item \textbf{DEM interpolation}: scattered contour points $\rightarrow$ regular elevation grid
+\item \textbf{Slope computation}: gradient magnitude of the DEM
+\item \textbf{Hydrology}: D8 flow direction $\rightarrow$ accumulation $\rightarrow$ channel mask
+\item \textbf{Pond candidate ranking}: TPI multi-criteria scoring, greedy selection
+\item \textbf{Catchment delineation}: BFS upstream trace on the D8 grid
+\item \textbf{Response}: structured JSON
 \end{enumerate}
 
 \subsection{Why KML/KMZ? Custom Parser vs.\ Third-Party Libraries}
 
-The system accepts both raw KML (XML) and KMZ (zipped KML). Rather than depending on heavy geo-libraries such as \texttt{geopandas} or \texttt{GDAL}, we wrote a lightweight XML parser using Python's built-in \texttt{xml.etree.ElementTree}. This has several advantages:
+The system accepts both raw KML (XML) and KMZ (zipped KML). Rather than depending on heavy geo-libraries such as \texttt{geopandas} or \texttt{GDAL}, I wrote a lightweight XML parser using Python's built-in \texttt{xml.etree.ElementTree}. This has several advantages:
 
 \begin{itemize}
-\item \textbf{Fewer dependencies} --- no system-level GDAL installation required
-\item \textbf{Namespace-aware} --- handles both the standard \texttt{opengis.net/kml/2.2} namespace and non-namespaced KML files
-\item \textbf{KMZ support} --- transparently extracts the inner \texttt{.kml} from a ZIP archive
-\item \textbf{Explicit error messages} --- custom \texttt{KMLParseError} gives precise feedback on malformed inputs
+\item \textbf{Fewer dependencies}: no system-level GDAL installation required
+\item \textbf{Namespace-aware}: handles both the standard \texttt{opengis.net/kml/2.2} namespace and non-namespaced KML files
+\item \textbf{KMZ support}: transparently extracts the inner \texttt{.kml} from a ZIP archive
+\item \textbf{Explicit error messages}: custom \texttt{KMLParseError} gives precise feedback on malformed inputs
 \end{itemize}
 
 
-\subsection{UTM Projection --- Why Not Geographic Coordinates?}
+\subsection{UTM Projection: Why Not Geographic Coordinates?}
 
 All analysis is performed in a projected coordinate system (Universal Transverse Mercator, UTM) rather than geographic degrees. The reasons are fundamental:
 
 \begin{itemize}
-\item \textbf{Metric units required} --- DEM grid spacing, slope angles, catchment areas, and minimum candidate separation distances are all expressed in metres. Computing these in degrees is geometrically incorrect near non-equatorial latitudes.
-\item \textbf{Isotropic grid cells} --- UTM produces square cells; degree-based grids have rectangular cells (longitude degrees are shorter than latitude degrees), distorting slope and flow direction calculations.
-\item \textbf{Auto-zone selection} --- \texttt{utils/projection.py} determines the correct UTM zone from the bounding box of the input data using \texttt{pyproj}, so no manual configuration is needed for any region of the world.
+\item \textbf{Metric units required}: DEM grid spacing, slope angles, catchment areas, and minimum candidate separation distances are all expressed in metres. Computing these in degrees is geometrically incorrect near non-equatorial latitudes.
+\item \textbf{Isotropic grid cells}: UTM produces square cells; degree-based grids have rectangular cells (longitude degrees are shorter than latitude degrees), distorting slope and flow direction calculations.
+\item \textbf{Auto-zone selection}: \texttt{utils/projection.py} determines the correct UTM zone from the bounding box of the input data using \texttt{pyproj}, so no manual configuration is needed for any region of the world.
 \end{itemize}
 
-\subsection{DEM Interpolation --- Radial Basis Function}
+\subsection{DEM Interpolation: Radial Basis Function}
 
-Contour lines provide elevation values along irregular curves, not on a regular grid. To compute slope and flow direction we need a \textbf{Digital Elevation Model (DEM)} --- a regular grid of elevation values. We use \textbf{scipy's Radial Basis Function (RBF) interpolation} for this step.
+Contour lines provide elevation values along irregular curves, not on a regular grid. To compute slope and flow direction we need a \textbf{Digital Elevation Model (DEM)}: a regular grid of elevation values. I use \textbf{scipy's Radial Basis Function (RBF) interpolation} for this step.
 
 \textbf{Why RBF over alternatives?}
 
 \begin{itemize}
-\item \textbf{vs.\ Linear/bilinear interpolation} --- Linear methods produce flat ``facets'' between contour lines and sharp ridges at contours; RBF produces smooth, natural-looking terrain that better represents the ground surface.
-\item \textbf{vs.\ Inverse Distance Weighting (IDW)} --- IDW exhibits the ``bull's-eye'' artefact around data points; RBF minimises this by fitting a globally smooth surface.
-\item \textbf{vs.\ Kriging} --- Kriging is statistically optimal but requires variogram fitting and is computationally expensive for 200k+ input points. Scipy RBF achieves comparable smoothness with far less complexity.
-\item \textbf{Adaptive resolution} --- The DEM cell size is set proportionally to the average inter-contour spacing, so fine-grained (1\,m interval) and coarse (5\,m interval) maps are both handled correctly.
+\item \textbf{vs.\ Linear/bilinear interpolation}: Linear methods produce flat ``facets'' between contour lines and sharp ridges at contours; RBF produces smooth, natural-looking terrain that better represents the ground surface.
+\item \textbf{vs.\ Inverse Distance Weighting (IDW)}: IDW exhibits the ``bull's-eye'' artefact around data points; RBF minimises this by fitting a globally smooth surface.
+\item \textbf{vs.\ Kriging}: Kriging is statistically optimal but requires variogram fitting and is computationally expensive for 200k+ input points. Scipy RBF achieves comparable smoothness with far less complexity.
+\item \textbf{Adaptive resolution}: The DEM cell size is set proportionally to the average inter-contour spacing, so fine-grained (1\,m interval) and coarse (5\,m interval) maps are both handled correctly.
 \end{itemize}
 
-\subsection{D8 Flow Direction --- Why Deterministic Single-Flow?}
+\subsection{D8 Flow Direction: Why Deterministic Single-Flow?}
 
-Flow direction is the foundation of the catchment delineation algorithm. We use the \textbf{D8 (Deterministic 8-direction)} algorithm, which directs each cell to its single steepest downhill neighbour among the 8 cardinal/diagonal directions.
+Flow direction is the foundation of the catchment delineation algorithm. I am using the \textbf{D8 (Deterministic 8-direction)} algorithm, which directs each cell to its single steepest downhill neighbour among the 8 cardinal/diagonal directions.
 
 \textbf{Why D8 over alternatives?}
 
 \begin{itemize}
-\item \textbf{vs.\ D-Infinity (Dinfinity)} --- D-Infinity distributes flow proportionally between two downhill neighbours, producing fractional flow weights. This is more realistic for dispersed overland flow but complicates the BFS catchment trace significantly. For pond planning, we want a \emph{definitive} upstream contributing area, which D8 provides directly.
-\item \textbf{vs.\ Multiple Flow Direction (MFD)} --- MFD spreads flow across all downhill neighbours. Again more realistic for surface runoff modelling, but yields a probabilistic catchment that is harder to interpret as a single bounded polygon.
-\item \textbf{Reproducibility} --- D8 is deterministic: the same DEM always produces the same flow direction grid. This is important for consistent API responses and testability.
-\item \textbf{Established standard} --- D8 uses ArcGIS-standard direction codes (E=1, SE=2, S=4, SW=8, W=16, NW=32, N=64, NE=128), making results interpretable with standard GIS tools.
+\item \textbf{vs.\ D-Infinity (Dinfinity)}: D-Infinity distributes flow proportionally between two downhill neighbours, producing fractional flow weights. This is more realistic for dispersed overland flow but complicates the BFS catchment trace significantly. For pond planning, we want a \emph{definitive} upstream contributing area, which D8 provides directly.
+\item \textbf{vs.\ Multiple Flow Direction (MFD)}: MFD spreads flow across all downhill neighbours. Again more realistic for surface runoff modelling, but yields a probabilistic catchment that is harder to interpret as a single bounded polygon.
+\item \textbf{Reproducibility}: D8 is deterministic: the same DEM always produces the same flow direction grid. This is important for consistent API responses and testability.
+\item \textbf{Established standard}: D8 uses ArcGIS-standard direction codes (E=1, SE=2, S=4, SW=8, W=16, NW=32, N=64, NE=128), making results interpretable with standard GIS tools.
 \end{itemize}
 
-\subsection{No Pit Filling --- A Deliberate Choice}
-
-Many hydrological workflows apply a \textbf{pit-filling} algorithm (e.g., Wang \& Liu, 2006) before computing flow direction, to eliminate flat areas and sinks. We explicitly \emph{do not} pit-fill, for the following reason:
-
-\begin{quote}
-\emph{Topographic depressions are exactly where we want to place ponds. Pit-filling artificially raises the elevation of those depressions so that water flows away from them, which causes the flow direction grid to route water \emph{out} of the best pond sites. This collapses the catchment of the top-ranked candidates to near-zero.}
-\end{quote}
-
-Without pit filling, the D8 grid preserves natural basins. The flow direction code 0 (no-flow) at pit cells is a correct representation: those cells have no downhill neighbour because they sit at the bottom of a local depression. The BFS catchment trace treats these correctly as terminal pour points.
-
-\textbf{Consequence}: some candidates (those at pit cells in flat areas) have very small catchments because no surrounding cells drain into them under the strict D8 model. This is an accurate reflection of the terrain, not an algorithmic deficiency.
-
-\subsection{Pond Candidate Identification --- TPI Multi-Criteria Scoring}
+\subsection{Pond Candidate Identification: TPI Multi-Criteria Scoring}
 
 \subsubsection{Topographic Position Index (TPI)}
 
@@ -150,7 +121,7 @@ The \textbf{Topographic Position Index} is defined as:
 \begin{equation}
     \text{TPI}(c) = z(c) - \frac{1}{|W|}\sum_{n \in W} z(n)
 \end{equation}
-where $z(c)$ is the elevation of cell $c$ and $W$ is a circular neighbourhood window of radius $r_w$. A \emph{negative} TPI indicates the cell is lower than its surroundings --- a depression or valley bottom, which is ideal for water harvesting.
+where $z(c)$ is the elevation of cell $c$ and $W$ is a circular neighbourhood window of radius $r_w$. A \emph{negative} TPI indicates the cell is lower than its surroundings: a depression or valley bottom, which is ideal for water harvesting.
 
 \textbf{Why TPI over raw elevation?} A cell at low absolute elevation may be on a gentle hillside with no local convergence. TPI distinguishes true depressions from low-lying flat areas, making it a far better predictor of natural water collection than elevation alone.
 
@@ -162,9 +133,9 @@ The composite score combines three normalised components:
 \end{equation}
 
 \begin{itemize}
-\item $\tilde{S}_e$ --- \textbf{Elevation score}: lower-elevation sites have more terrain above them to collect runoff. Cells above a slope threshold ($>8°$) are masked out before scoring.
-\item $\tilde{S}_s$ --- \textbf{Slope score}: shallower slopes reduce excavation cost and embankment requirements. Scored as $1 - \text{slope}/\text{max\_slope}$.
-\item $\tilde{S}_d$ --- \textbf{Depression score}: derived from TPI; more negative TPI = stronger depression = higher score. Cells above the slope threshold receive $S_d = 0$.
+\item $\tilde{S}_e$: \textbf{Elevation score}: lower-elevation sites have more terrain above them to collect runoff. Cells above a slope threshold ($>8°$) are masked out before scoring.
+\item $\tilde{S}_s$: \textbf{Slope score}: shallower slopes reduce excavation cost and embankment requirements. Scored as $1 - \text{slope}/\text{max\_slope}$.
+\item $\tilde{S}_d$: \textbf{Depression score}: derived from TPI; more negative TPI = stronger depression = higher score. Cells above the slope threshold receive $S_d = 0$.
 \item Default weights: $w_e=0.30$, $w_s=0.40$, $w_d=0.30$. All weights are API-configurable.
 \end{itemize}
 
@@ -177,11 +148,11 @@ After scoring all cells, candidates are selected greedily: the highest-scoring c
 \textbf{Why greedy over clustering?}
 \begin{itemize}
 \item Clustering (k-means, DBSCAN) requires tuning cluster parameters and may merge two genuinely distinct good sites into one cluster.
-\item The greedy approach is $\mathcal{O}(N \cdot k)$ where $k$ is the number of candidates --- efficient even on large grids.
+\item The greedy approach is $\mathcal{O}(N \cdot k)$ where $k$ is the number of candidates: efficient even on large grids.
 \item The minimum separation distance is a physically meaningful parameter (minimum distance between two ponds) rather than an abstract cluster bandwidth.
 \end{itemize}
 
-\subsection{Catchment Delineation --- BFS on the D8 Grid}
+\subsection{Catchment Delineation: BFS on the D8 Grid}
 
 Given a pour point $(r_0, c_0)$, the catchment is all cells that ultimately drain into it under the D8 model. We find these with a \textbf{Breadth-First Search (BFS)} over the reverse D8 graph:
 
@@ -211,7 +182,7 @@ where $r$ is the DEM resolution. The polygon boundary is extracted from the rast
 \begin{itemize}
 \item No additional dependencies (no GRASS, SAGA, or TauDEM required)
 \item The algorithm is transparent, testable, and directly tied to the D8 grid produced in the hydrology step
-\item BFS is $\mathcal{O}(\text{rows} \times \text{cols})$ --- linear in the grid size, efficient for grids up to thousands of cells on a side
+\item BFS is $\mathcal{O}(\text{rows} \times \text{cols})$: linear in the grid size, efficient for grids up to thousands of cells on a side
 \end{itemize}
 
 \section{API Documentation}
@@ -228,7 +199,7 @@ where $r$ is the DEM resolution. The polygon boundary is extracted from the rast
 \toprule
 \textbf{Parameter} & \textbf{Type} & \textbf{Description} \\
 \midrule
-\texttt{file} & \texttt{multipart/form-data} & KML or KMZ contour map \\
+\texttt{contour\_map} & \texttt{multipart/form-data} & KML or KMZ contour map \\
 \bottomrule
 \end{tabular}
 \caption{Request parameters}
@@ -237,8 +208,8 @@ where $r$ is the DEM resolution. The polygon boundary is extracted from the rast
 \subsection{Example Request}
 
 \begin{lstlisting}[style=bash]
-curl -X POST http://localhost:5000/api/analyzeContour \
-     -F "file=@contours_1m.kml"
+curl -X POST http://10.1.75.51:5273/api/analyzeContour \
+     -F "contour_map=@contours_1m.kml"
 \end{lstlisting}
 
 \subsection{Response Schema}
@@ -312,7 +283,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 \toprule
 \textbf{HTTP} & \textbf{Condition} & \textbf{Description} \\
 \midrule
-400 & Missing \texttt{file} field & No file key in multipart body \\
+400 & Missing \texttt{contour\_map} field & No contour\_map key in multipart body \\
 400 & Empty filename & File part has no filename \\
 415 & Wrong extension & Not \texttt{.kml} or \texttt{.kmz} \\
 422 & Validation failure & Malformed KML or terrain validation fails \\
@@ -337,8 +308,8 @@ The provided sample file \texttt{contours\_1m.kml} covers a rural area near Bila
     \centering
     \includegraphics[width=\textwidth]{report_dem.png}
     \caption{\textbf{Terrain visualisation for the sample contour map.}
-    \textit{Left:} Hillshaded elevation surface (315$^\circ$ azimuth, 45$^\circ$ altitude light source) --- hill shading makes valley and ridge structure immediately apparent.
-    \textit{Centre:} Slope map in degrees (yellow = flat $<2^\circ$, red = steep $>15^\circ$) --- the flat valley bottoms are the candidate pond zones.
+    \textit{Left:} Hillshaded elevation surface (315$^\circ$ azimuth, 45$^\circ$ altitude light source): hill shading makes valley and ridge structure immediately apparent.
+    \textit{Centre:} Slope map in degrees (yellow = flat $<2^\circ$, red = steep $>15^\circ$): the flat valley bottoms are the candidate pond zones.
     \textit{Right:} Contour lines reconstructed from the interpolated DEM, confirming the interpolation accurately reproduces the input survey data.}
     \label{fig:dem}
 \end{figure}
@@ -352,7 +323,7 @@ The DEM is a $439 \times 542$ grid at 6\,m/cell. Mean slope is 3.4$^\circ$; stee
     \includegraphics[width=\textwidth]{report_pond.png}
     \caption{\textbf{Top 10 pond candidates.}
     \textit{Left:} Hillshaded DEM with rainbow-ranked sites (red star = \#1 best). Score and rank are annotated at each site.
-    \textit{Centre:} Slope map --- all candidates sit in low-slope zones ($<5^\circ$), confirming the scoring correctly penalises steep cells.
+    \textit{Centre:} Slope map: all candidates sit in low-slope zones ($<5^\circ$), confirming the scoring correctly penalises steep cells.
     \textit{Right:} TPI zoom ($\pm$400\,m) around the \#1 site; deep blue = strong depression, confirming the site is a genuine topographic low.}
     \label{fig:candidates}
 \end{figure}
@@ -422,11 +393,11 @@ The \textbf{\#1 candidate} (lat 21.2596, lon 81.3001, elev 274.1\,m, slope 4.3$^
 A core requirement is that the system must generalise to other contour maps without code changes. The following design decisions ensure this:
 
 \begin{itemize}
-\item \textbf{No hard-coded coordinates or elevations} --- every threshold, grid size, and score is derived from the statistics of the uploaded file.
-\item \textbf{Automatic UTM zone selection} --- works anywhere on Earth; tested with maps from central India and designed to handle any KML input from other regions.
-\item \textbf{Adaptive DEM resolution} --- the grid spacing is computed as a fraction of the average inter-contour distance, so both 1\,m and 5\,m contour intervals produce appropriately-resolved DEMs.
-\item \textbf{Configurable scoring weights and candidate count} --- API callers can override defaults via request parameters, enabling per-region tuning without changing server code.
-\item \textbf{Modular pipeline} --- each stage (\texttt{terrain}, \texttt{dem}, \texttt{hydrology}, \texttt{pond}, \texttt{catchment}) is an independent module with its own test suite. Future phases can replace or augment individual stages (e.g., add soil permeability, seasonal runoff coefficients, or road accessibility layers) without touching the rest of the pipeline.
+\item \textbf{No hard-coded coordinates or elevations}: every threshold, grid size, and score is derived from the statistics of the uploaded file.
+\item \textbf{Automatic UTM zone selection}: works anywhere on Earth; tested with maps from central India and designed to handle any KML input from other regions.
+\item \textbf{Adaptive DEM resolution}: the grid spacing is computed as a fraction of the average inter-contour distance, so both 1\,m and 5\,m contour intervals produce appropriately-resolved DEMs.
+\item \textbf{Configurable scoring weights and candidate count}: API callers can override defaults via request parameters, enabling per-region tuning without changing server code.
+\item \textbf{Modular pipeline}: each stage (\texttt{terrain}, \texttt{dem}, \texttt{hydrology}, \texttt{pond}, \texttt{catchment}) is an independent module with its own test suite. Future phases can replace or augment individual stages (e.g., add soil permeability, seasonal runoff coefficients, or road accessibility layers) without touching the rest of the pipeline.
 \end{itemize}
 
 \section{Test Coverage}
@@ -465,15 +436,54 @@ pip install -r requirements.txt
 
 # 3. Start server
 PYTHONPATH=. python app.py
-#  * Running on http://127.0.0.1:5000
+#  * Running on http://10.1.75.51:5273
 
 # 4. Run test suite
 PYTHONPATH=. pytest tests/ -v   # 178 tests, all passing
 
 # 5. Upload sample map
-curl -X POST http://localhost:5000/api/analyzeContour \
-     -F "file=@contours_1m.kml"
+curl -X POST http://10.1.75.51:5273/api/analyzeContour \
+     -F "contour_map=@contours_1m.kml"
 \end{lstlisting}
+
+\section{Live API Demonstration}
+
+The API is deployed and accessible at:
+
+\begin{center}
+    \large\texttt{http://10.1.75.51:5273/api/analyzeContour}
+\end{center}
+
+\subsection{curl Request from Local Machine}
+
+The following command was used to submit the sample contour map to the deployed server from a local machine on the same network:
+
+\begin{lstlisting}[style=bash]
+curl -X POST http://10.1.75.51:5273/api/analyzeContour \
+     -F "contour_map=@contours_1m.kml"
+\end{lstlisting}
+
+\subsection{API Response (Screenshot)}
+
+Figure~\ref{fig:curl} shows a screenshot of the terminal output after sending the request. The full JSON response is truncated in the screenshot as it is several hundred lines long; the visible portion shows the \texttt{status}, \texttt{filename}, \texttt{terrain}, and the beginning of the \texttt{dem} block, confirming the server received the file, parsed 1355 contours, and began returning structured results.
+
+\begin{figure}[H]
+    \centering
+    % ---------------------------------------------------------------
+    % Place your curl screenshot here:
+    % \includegraphics[width=\textwidth]{curl_response.png}
+    % ---------------------------------------------------------------
+    \fbox{\parbox[c][9cm][c]{0.95\textwidth}{\centering
+        \textit{[Insert screenshot of curl response here]}\\[0.5cm]
+        \small Filename: \texttt{curl\_response.png}
+    }}
+    \caption{\textbf{curl response from the deployed API at \texttt{http://10.1.75.51:5273}.}
+    The terminal shows the beginning of the JSON response from \texttt{POST /api/analyzeContour}
+    with the sample contour map \texttt{contours\_1m.kml}.
+    The full response (top 10 candidates with catchment polygons) is several hundred lines;
+    only the initial portion is visible in the screenshot.}
+    \label{fig:curl}
+\end{figure}
 
 \section{Conclusion}
 
@@ -482,7 +492,7 @@ This phase delivers a fully generalised REST API for village pond site selection
 \begin{enumerate}
 \item A robust KML/KMZ ingest pipeline with strict validation and informative error messages
 \item An RBF-based DEM interpolation that produces smooth, accurate elevation grids from irregular contour data
-\item A D8 hydrological model that preserves natural depressions --- the very features that make good pond sites --- rather than eliminating them via pit-filling
+\item A D8 hydrological model that preserves natural depressions: the very features that make good pond sites: rather than eliminating them via pit-filling
 \item A TPI-based multi-criteria scoring system that combines topographic position, slope suitability, and relative elevation into a single, interpretable score
 \item A BFS catchment delineation that computes exact upstream contributing areas with no external GIS dependencies
 \item A clean, well-documented JSON API with 178 automated tests verifying correctness at every stage
