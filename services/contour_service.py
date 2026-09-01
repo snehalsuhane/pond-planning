@@ -134,6 +134,14 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
         candidate["catchment"] = catchment
 
     # ── 11. Success response ──────────────────────────────────────────────────
+    # Strip internal raster indices (grid_row / grid_col) before serialising —
+    # callers only need geographic coordinates, not pixel positions.
+    _INTERNAL = {"grid_row", "grid_col"}
+    response_candidates = [
+        {k: v for k, v in c.items() if k not in _INTERNAL}
+        for c in candidates.get("pond_candidates", [])
+    ]
+
     terrain["crs"] = crs_info
     return (
         {
@@ -154,7 +162,7 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
                     "slope_mean_deg": slope_result["slope_mean"],
                 },
             },
-            "pond_candidates": candidates["pond_candidates"],
+            "pond_candidates": response_candidates,
             "hydrology": {
                 "noflow_count":       hydro["noflow_count"],
                 "acc_max":            hydro["acc_max"],

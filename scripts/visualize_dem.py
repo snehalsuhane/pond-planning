@@ -112,11 +112,15 @@ def main():
     axes[1].set_xlabel("Easting (m)"); axes[1].set_ylabel("Northing (m)")
 
     # ── Panel 3: Contour map ──────────────────────────────────────────────────
+    # Use imshow as base (preserves aspect="equal" correctly) and
+    # overlay contour lines on top.
     xx, yy = np.meshgrid(gx, gy)
     n_levels = min(30, max(5, int(dem_result["elevation_max"] - dem_result["elevation_min"]) + 1))
-    cf = axes[2].contourf(xx, yy, dem, levels=n_levels, cmap="terrain")
-    cl = axes[2].contour(xx, yy, dem, levels=n_levels, colors="black", linewidths=0.4, alpha=0.5)
-    plt.colorbar(cf, ax=axes[2], label="Elevation (m)", shrink=0.8)
+    im2 = axes[2].imshow(dem, extent=extent, origin="lower",
+                         cmap="terrain", aspect="equal")
+    plt.colorbar(im2, ax=axes[2], label="Elevation (m)", shrink=0.8)
+    cl = axes[2].contour(xx, yy, dem, levels=n_levels,
+                         colors="black", linewidths=0.5, alpha=0.6)
     axes[2].set_title("Contour Map (reconstructed from DEM)")
     axes[2].set_xlabel("Easting (m)"); axes[2].set_ylabel("Northing (m)")
     try:
