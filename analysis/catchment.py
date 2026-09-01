@@ -111,9 +111,13 @@ def delineate_catchment(
     polygon = []
     for (col_idx, row_idx) in longest_line:
         # contourpy returns floats for exact interpolated boundaries.
-        # We linearly interpolate the projected X, Y coordinates:
-        x_proj = gx[0] + col_idx * res
-        y_proj = gy[0] + row_idx * res
+        # Linearly interpolate the projected X, Y from the coordinate arrays:
+        col_lo = int(np.clip(np.floor(col_idx), 0, len(gx) - 2))
+        row_lo = int(np.clip(np.floor(row_idx), 0, len(gy) - 2))
+        col_frac = col_idx - col_lo
+        row_frac = row_idx - row_lo
+        x_proj = float(gx[col_lo] * (1 - col_frac) + gx[col_lo + 1] * col_frac)
+        y_proj = float(gy[row_lo] * (1 - row_frac) + gy[row_lo + 1] * row_frac)
         
         lon, lat = transformer.transform(x_proj, y_proj)
         polygon.append([round(float(lon), 6), round(float(lat), 6)])

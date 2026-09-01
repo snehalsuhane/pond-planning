@@ -236,7 +236,13 @@ def find_pond_candidate(
     border_cells:  int   = 3,
 ) -> dict:
     """
-    Compatibility wrapper returning a single pond_site.
+    Return the single best pond candidate as a ``pond_site`` dict.
+
+    This is a convenience wrapper around ``rank_pond_candidates`` for
+    callers that only need one result and prefer the simpler
+    ``{"pond_site": {...}}`` return shape (e.g. unit tests, quick scripts).
+    For production use and API responses, call ``rank_pond_candidates``
+    directly with ``num_candidates=N``.
     """
     result = rank_pond_candidates(
         dem_result=dem_result,

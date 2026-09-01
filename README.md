@@ -35,7 +35,7 @@ pond-planning/
 │   ├── verify_kml.py
 │   ├── visualize_dem.py
 │   ├── visualize_pond.py
-│   └── visualize_hydrology.py  # DEM + flow accumulation + channel network
+│   └── visualize_catchment.py
 ├── uploads/
 ├── requirements.txt
 └── README.md
@@ -119,8 +119,7 @@ The API will be available at `http://localhost:5000`.
 - Selection weights, slope threshold, and window sizes are all configurable
 
 ### Flow Direction, Accumulation & Channels — `analysis/hydrology.py`
-- **Independent Component:** Currently operates independently from pond scoring to provide structural terrain metadata and lay groundwork for future catchment delineation.
-- **Independent Component:** Currently operates independently from pond scoring to provide structural terrain metadata and lay groundwork for future catchment delineation.
+- **Integrated pipeline step:** Runs immediately after DEM/slope computation and feeds the catchment delineation module.
 - Implements the **D8 (deterministic 8-direction)** algorithm: each cell is directed toward the steepest of its 8 neighbours
 - ArcGIS-standard direction codes (E=1, SE=2, S=4, SW=8, W=16, NW=32, N=64, NE=128); code 0 = pit/flat cell
 - Slope computation is **fully vectorised** using numpy array slicing over a padded DEM
@@ -151,15 +150,13 @@ Upload (KML/KMZ)
       ↓
 [analysis/terrain.py]   →  slope per cell
       ↓
-[analysis/pond.py]      →  pond_candidates list (Top N ranked sites)
-      ↓
 [analysis/hydrology.py] →  D8 flow direction → flow accumulation → channel mask
+      ↓
+[analysis/pond.py]      →  pond_candidates list (Top N ranked sites)
       ↓
 [analysis/catchment.py] →  catchment polygon and area for all candidates
       ↓
 API response: terrain + DEM + pond_candidates + hydrology
-      ↓
-[Next] Catchment area delineation
 ```
 
 ---
@@ -252,7 +249,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-174 tests across 7 test modules — all passing.
+177 tests across 8 test modules — all passing.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -263,7 +260,7 @@ python -m pytest tests/ -v
 | `test_dem.py` | 28 | DEM structure, dimensions, elevation range, NaN, reusability |
 | `test_pond.py` | 25 | Slope, Top N multi-candidate ranking, TPI depression scoring |
 | `test_hydrology.py` | 32 | D8 direction codes, ramp/bowl tests, accumulation, channels |
-| `test_catchment.py` | 4 | D8 upstream tracing, raster mask, area units, boundary checks |
+| `test_catchment.py` | 7 | D8 upstream tracing, raster mask, area units, polygon WGS84 bounds |
 
 ---
 
@@ -282,18 +279,11 @@ python scripts/visualize_dem.py /path/to/your/file.kml
 # outputs: dem_visualization.png
 ```
 
-To visualize flow accumulation + channel network:
-
-```bash
-python scripts/visualize_hydrology.py /path/to/your/file.kml
-# outputs: hydrology.png  (DEM | log-accumulation | channel network)
-```
-
 To visualize the top 10 pond candidates:
 
 ```bash
 python scripts/visualize_pond.py /path/to/your/file.kml
-# outputs: pond_candidates.png
+# outputs: pond_candidates.png  (hillshaded DEM | slope map | TPI zoom around #1)
 ```
 
 To visualize the delineated catchment areas for all 10 candidates:

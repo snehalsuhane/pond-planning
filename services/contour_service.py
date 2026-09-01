@@ -131,10 +131,6 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
     for candidate in candidates.get("pond_candidates", []):
         pour_point = (candidate["grid_row"], candidate["grid_col"])
         catchment = delineate_catchment(hydro, pour_point, dem_result, epsg)
-        catchment["pour_point"] = {
-            "latitude": candidate["latitude"],
-            "longitude": candidate["longitude"]
-        }
         candidate["catchment"] = catchment
 
     # ── 11. Success response ──────────────────────────────────────────────────

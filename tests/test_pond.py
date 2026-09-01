@@ -89,11 +89,6 @@ def dome_slope(dome_dem):
     return calculate_slope(dome_dem)
 
 
-@pytest.fixture(scope="module")
-def dome_hydro(dome_dem):
-    return run_hydrology(dome_dem)
-
-
 # ---------------------------------------------------------------------------
 # calculate_slope tests
 # ---------------------------------------------------------------------------
@@ -297,3 +292,14 @@ class TestRankPondCandidates:
         c1 = candidates[0]
         assert 10 <= c1["grid_row"] < 20
         assert 10 <= c1["grid_col"] < 20
+
+    def test_criteria_scores_sum_to_total(self, dome_dem, dome_slope):
+        """The component scores in criteria should sum to the overall score."""
+        result = rank_pond_candidates(dome_dem, dome_slope, EPSG, num_candidates=5)
+        for c in result["pond_candidates"]:
+            crit = c["criteria"]
+            component_sum = sum(crit.values())
+            # Allow small floating-point rounding (scores are rounded to 3dp each)
+            assert abs(component_sum - c["score"]) < 0.01, (
+                f"Rank #{c['rank']}: criteria sum {component_sum:.4f} != score {c['score']:.4f}"
+            )

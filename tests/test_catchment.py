@@ -69,3 +69,34 @@ class TestDelineateCatchment:
         fdir = np.zeros((5, 5), dtype=np.int16)
         with pytest.raises(ValueError, match="out of bounds"):
             delineate_catchment({"flow_direction": fdir}, (10, 10), dem_result_mock, 32644)
+
+    def test_area_unit_consistency(self, dem_result_mock):
+        """area_ha must equal area_m2 / 10000 and area_km2 must equal area_m2 / 1e6."""
+        fdir = np.zeros((5, 5), dtype=np.int16)
+        fdir[2, 1] = 16
+        fdir[2, 2] = 16
+        fdir[2, 3] = 16
+        result = delineate_catchment({"flow_direction": fdir}, (2, 1), dem_result_mock, 32644)
+
+        assert pytest.approx(result["area_ha"],  rel=1e-9) == result["area_m2"] / 10_000
+        assert pytest.approx(result["area_km2"], rel=1e-9) == result["area_m2"] / 1_000_000
+
+    def test_polygon_coords_are_valid_wgs84(self, dem_result_mock):
+        """All polygon coordinates must be valid WGS84 lon/lat values."""
+        fdir = np.zeros((5, 5), dtype=np.int16)
+        fdir[2, 1] = 16
+        fdir[2, 2] = 16
+        fdir[2, 3] = 16
+        result = delineate_catchment({"flow_direction": fdir}, (2, 1), dem_result_mock, 32644)
+
+        for lon, lat in result["polygon"]:
+            assert -180.0 <= lon <= 180.0, f"Longitude {lon} out of WGS84 range"
+            assert  -90.0 <= lat <=  90.0, f"Latitude {lat} out of WGS84 range"
+
+    def test_empty_polygon_when_isolated_cell(self):
+        """A single isolated pour point on a tiny grid may produce an empty polygon — must not crash."""
+        mock = {"x_coords": np.array([0.0, 10.0]), "y_coords": np.array([0.0, 10.0]), "resolution_m": 10.0}
+        fdir = np.zeros((2, 2), dtype=np.int16)
+        result = delineate_catchment({"flow_direction": fdir}, (0, 0), mock, 32644)
+        assert "polygon" in result
+        assert "area_m2" in result

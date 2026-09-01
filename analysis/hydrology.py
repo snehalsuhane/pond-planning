@@ -3,9 +3,12 @@ Analysis: hydrology
 
 D8 flow direction, flow accumulation, and drainage channel detection.
 
-Note: This module currently operates as an independent component. It provides 
-valuable terrain metadata and lays the groundwork for future catchment delineation, 
-but is intentionally decoupled from the core pond candidate scoring algorithm.
+This module is an integrated step in the full analysis pipeline:
+  DEM → slope → hydrology (this module) → pond candidates → catchment
+
+The flow direction grid produced here is consumed by analysis.catchment
+for upstream BFS tracing, and the channel mask and accumulation stats
+are returned in the API response under the ``hydrology`` key.
 
 Public API
 ----------
