@@ -32,4 +32,5 @@ scratch/
 *.kml
 *.kmz
 
-*.tex
+# Successful Overpass responses cached across local runs
+.cache/waterways/

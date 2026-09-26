@@ -14,6 +14,7 @@ from analysis.hydrology import (
     calculate_flow_accumulation,
     detect_channels,
     run_hydrology,
+    resolve_flats,
 )
 
 
@@ -121,7 +122,7 @@ class TestCalculateFlowDirection:
     def test_flat_dem_all_noflow(self):
         """A completely flat DEM should have no direction for any cell."""
         flat = _make_dem_result(np.full((10, 10), 270.0))
-        result = calculate_flow_direction(flat)
+        result = calculate_flow_direction(flat, fill_pits=False)
         assert result["noflow_count"] == 100
 
 
@@ -132,11 +133,13 @@ class TestCalculateFlowDirection:
 class TestCalculateFlowAccumulation:
 
     @pytest.fixture(scope="class")
-    def ramp_fdir(self):
+    @staticmethod
+    def ramp_fdir():
         return calculate_flow_direction(_ramp_x(rows=10, cols=10))
 
     @pytest.fixture(scope="class")
-    def dome_fdir(self):
+    @staticmethod
+    def dome_fdir():
         return calculate_flow_direction(_dome())
 
     def test_returns_dict(self, ramp_fdir):
@@ -199,7 +202,8 @@ class TestCalculateFlowAccumulation:
 class TestDetectChannels:
 
     @pytest.fixture(scope="class")
-    def dome_facc(self):
+    @staticmethod
+    def dome_facc():
         fdir = calculate_flow_direction(_dome(rows=40, cols=40))
         return calculate_flow_accumulation(fdir)
 
@@ -253,7 +257,8 @@ class TestDetectChannels:
 class TestRunHydrology:
 
     @pytest.fixture(scope="class")
-    def hydro(self):
+    @staticmethod
+    def hydro():
         return run_hydrology(_dome(rows=30, cols=30))
 
     def test_returns_dict(self, hydro):
@@ -287,3 +292,110 @@ class TestRunHydrology:
         h2 = run_hydrology(_bowl(rows=20, cols=20))
         # Bowl and dome have different accumulation patterns
         assert h1["acc_max"] != h2["acc_max"] or h1["noflow_count"] != h2["noflow_count"]
+
+
+# ---------------------------------------------------------------------------
+# Flat resolution & DEM conditioning tests
+# ---------------------------------------------------------------------------
+
+class TestFlatResolution:
+
+    def test_resolve_flats_routes_across_plateau(self):
+        """A flat plateau between high terrain and low terrain should route flow toward low terrain."""
+        plateau = np.full((10, 10), 100.0)
+        plateau[:3, :] = 110.0   # high terrain to the north
+        plateau[8:, :] = 90.0    # low terrain to the south
+
+        dem_r = _make_dem_result(plateau, res=5.0)
+        # Without flat resolution
+        raw_res = calculate_flow_direction(dem_r, fill_pits=False)
+        # Flat cells in rows 3 to 7 have no downhill neighbour
+        assert raw_res["noflow_count"] >= 50
+
+        # With flat resolution
+        resolved_res = calculate_flow_direction(dem_r, fill_pits=True, smooth=False)
+        fdir = resolved_res["flow_direction"]
+
+        # Interior plateau cells (rows 4 to 6) must all flow southwards (codes 2, 4, or 8)
+        plateau_fdirs = fdir[4:7, :]
+        south_codes = {2, 4, 8}
+        assert set(np.unique(plateau_fdirs)).issubset(south_codes)
+        assert resolved_res["noflow_count"] < raw_res["noflow_count"]
+
+    def test_fill_pits_false_preserves_raw_behavior(self):
+        """Disabling fill_pits leaves pit cells with direction 0."""
+        dem = np.full((7, 7), 200.0)
+        dem[3, 3] = 150.0   # pit in centre
+        dem_r = _make_dem_result(dem, res=5.0)
+
+        # Raw (no fill)
+        raw_res = calculate_flow_direction(dem_r, fill_pits=False)
+        assert raw_res["flow_direction"][3, 3] == 0
+
+    def test_fill_pits_true_routes_through_interior_pit(self):
+        """When fill_pits is True, a pit on a sloping plane is filled and routes downstream."""
+        # Tilted ramp with a single pit in the interior
+        x = np.tile(np.arange(12, dtype=float), (12, 1))
+        dem = 250.0 + x * 2.0  # rises east, drains west
+        dem[5, 5] = 240.0      # artificial pit
+        dem_r = _make_dem_result(dem, res=5.0)
+
+        filled_res = calculate_flow_direction(dem_r, fill_pits=True, smooth=False)
+        # The former pit cell should now flow west (code 16) or southwest/northwest
+        assert filled_res["flow_direction"][5, 5] in {8, 16, 32}
+
+    def test_run_hydrology_options_propagate(self):
+        """Custom fill_pits and smooth options can be passed to run_hydrology."""
+        dem_r = _ramp_x(rows=10, cols=10)
+        hydro = run_hydrology(dem_r, fill_pits=True, smooth=False)
+        assert isinstance(hydro["flow_direction"], np.ndarray)
+        assert hydro["flow_direction"].shape == (10, 10)
+
+
+def test_near_equal_elevations_conserve_all_flow():
+    dem = np.full((15, 15), 289.0)
+    dem[:, -1] = 288.0
+    dem[7, 7] = np.nextafter(289.0, np.inf)
+    hydro = run_hydrology(_make_dem_result(dem), smooth=False)
+    fdir = hydro['flow_direction']
+    assert hydro['flow_accumulation'][fdir == 0].sum() == dem.size
+    assert not (fdir[1:-1, 1:-1] == 0).any()
+
+
+def test_all_flat_outlets_are_used_symmetrically():
+    dem = np.full((9, 15), 10.0)
+    dem[:, [0, -1]] = 9.0
+    hydro = run_hydrology(_make_dem_result(dem), smooth=False)
+    f = hydro['flow_direction']
+    assert f[4, 2] == 16
+    assert f[4, -3] == 1
+    assert hydro['flow_accumulation'][f == 0].sum() == dem.size
+
+
+def test_cycles_are_rejected():
+    with pytest.raises(ValueError, match='cycles'):
+        calculate_flow_accumulation({'flow_direction': np.array([[1, 16]])})
+
+
+def test_masked_domain_and_real_sink():
+    dem = np.full((9, 9), 10.0)
+    dem[4, 4] = 5.0
+    valid = np.ones_like(dem, dtype=bool)
+    valid[:, :2] = False
+    sinks = np.zeros_like(valid)
+    sinks[4, 4] = True
+    d = _make_dem_result(dem)
+    d.update(valid_mask=valid, preserved_sink_mask=sinks)
+    hydro = run_hydrology(d)
+    assert hydro['conditioned_dem'][4, 4] == 5.0
+    assert hydro['flow_direction'][4, 4] == 0
+    assert (hydro['flow_accumulation'][~valid] == 0).all()
+    assert hydro['flow_accumulation'][hydro['flow_direction'] == 0].sum() == valid.sum()
+
+
+def test_filled_bowl_drains_to_open_boundary():
+    dem = np.full((9, 9), 10.0)
+    dem[1:-1, 1:-1] = 5.0
+    hydro = run_hydrology(_make_dem_result(dem))
+    assert not (hydro['flow_direction'][1:-1, 1:-1] == 0).any()
+    assert hydro['flow_accumulation'][hydro['flow_direction'] == 0].sum() == dem.size

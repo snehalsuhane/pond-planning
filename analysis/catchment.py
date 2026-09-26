@@ -7,7 +7,6 @@ using the D8 flow direction grid, and vectorizes it into a geographic polygon.
 
 import numpy as np
 from collections import deque
-import contourpy
 from pyproj import Transformer
 from analysis.hydrology import _D8
 
@@ -30,7 +29,7 @@ def delineate_catchment(
     fdir_result: dict,
     pour_point: tuple[int, int],
     dem_result: dict,
-    epsg: int
+    epsg: int,
 ) -> dict:
     """
     Delineate the catchment for a given pour point.
@@ -60,6 +59,10 @@ def delineate_catchment(
     if not (0 <= r_start < rows and 0 <= c_start < cols):
         raise ValueError(f"Pour point {pour_point} is out of bounds for grid size {rows}x{cols}")
 
+    valid = fdir_result.get("valid_mask", np.ones_like(fdir, dtype=bool))
+    if not valid[r_start, c_start]:
+        raise ValueError("Pour point is outside the surveyed domain")
+
     # 1. Tracing algorithm (BFS)
     mask = np.zeros((rows, cols), dtype=bool)
     queue = deque([pour_point])
@@ -76,7 +79,7 @@ def delineate_catchment(
             
             # Check bounds and if already visited
             if 0 <= nr < rows and 0 <= nc < cols:
-                if not mask[nr, nc]:
+                if valid[nr, nc] and not mask[nr, nc]:
                     # If this neighbour's flow direction points towards (r, c)
                     if fdir[nr, nc] == rev_code:
                         mask[nr, nc] = True
@@ -87,44 +90,49 @@ def delineate_catchment(
     res = dem_result["resolution_m"]
     area_m2 = float(count * (res ** 2))
 
-    # 3. Vectorize the mask using contourpy
-    mask_float = mask.astype(float)
-    c_gen = contourpy.contour_generator(z=mask_float)
-    lines = c_gen.lines(0.5)
-
-    if not lines:
-        return {
-            "area_m2": area_m2,
-            "area_ha": round(area_m2 / 10000.0, 4),
-            "area_km2": round(area_m2 / 1000000.0, 6),
-            "polygon": []
-        }
-
-    # Extract the longest closed contour line (to ignore internal holes/artifacts)
-    longest_line = max(lines, key=len)
-
-    # 4. Project (col, row) pixel indices to geographic [lon, lat]
-    gx = dem_result["x_coords"]
-    gy = dem_result["y_coords"]
     transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
-    
-    polygon = []
-    for (col_idx, row_idx) in longest_line:
-        # contourpy returns floats for exact interpolated boundaries.
-        # Linearly interpolate the projected X, Y from the coordinate arrays:
-        col_lo = int(np.clip(np.floor(col_idx), 0, len(gx) - 2))
-        row_lo = int(np.clip(np.floor(row_idx), 0, len(gy) - 2))
-        col_frac = col_idx - col_lo
-        row_frac = row_idx - row_lo
-        x_proj = float(gx[col_lo] * (1 - col_frac) + gx[col_lo + 1] * col_frac)
-        y_proj = float(gy[row_lo] * (1 - row_frac) + gy[row_lo + 1] * row_frac)
-        
-        lon, lat = transformer.transform(x_proj, y_proj)
-        polygon.append([round(float(lon), 6), round(float(lat), 6)])
-
-    return {
-        "area_m2": area_m2,
-        "area_ha": round(area_m2 / 10000.0, 4),
-        "area_km2": round(area_m2 / 1000000.0, 6),
-        "polygon": polygon
+    lon, lat = transformer.transform(dem_result["x_coords"][c_start], dem_result["y_coords"][r_start])
+    boundary = np.zeros_like(valid)
+    boundary[[0, -1], :] = True
+    boundary[:, [0, -1]] = True
+    padded_valid = np.pad(valid, 1, constant_values=False)
+    for dr, dc, _ in _D8.values():
+        boundary |= ~padded_valid[1+dr:1+dr+rows, 1+dc:1+dc+cols]
+    metadata = {
+        "pour_point": {"latitude": float(lat), "longitude": float(lon)},
+        "outlet_shift_m": 0.0,
+        "boundary_truncated": bool((mask & boundary).any()),
     }
+
+    from analysis.raster_geometry import mask_geometry
+    return {
+        **metadata,
+        'area_m2': area_m2,
+        'area_ha': round(area_m2 / 10000, 4),
+        'area_km2': round(area_m2 / 1e6, 6),
+        **mask_geometry(mask, dem_result, epsg),
+    }
+
+
+def trace_upstream_catchment(hydro: dict, target_mask: np.ndarray) -> np.ndarray:
+    """Trace all cells draining to any collection-target cell, counting each once.
+
+    The target may be a single outlet or a natural depression. Flow is absorbed
+    on first entry; internal flat-routing branches do not split the catchment.
+    """
+    fdir = hydro['flow_direction']
+    valid = hydro.get('valid_mask', np.ones_like(fdir, dtype=bool))
+    if target_mask.shape != fdir.shape or not target_mask.any() or (target_mask & ~valid).any():
+        raise ValueError('Collection target must contain valid terrain cells')
+    mask = target_mask.copy()
+    rows, cols = mask.shape
+    queue = deque(map(tuple, np.argwhere(mask)))
+    while queue:
+        r, c = queue.popleft()
+        for (dr, dc), code in _REVERSE_D8.items():
+            nr, nc = r+dr, c+dc
+            if (0 <= nr < rows and 0 <= nc < cols and valid[nr, nc]
+                    and not mask[nr, nc] and fdir[nr, nc] == code):
+                mask[nr, nc] = True
+                queue.append((nr, nc))
+    return mask

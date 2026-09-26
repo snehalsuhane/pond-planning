@@ -16,6 +16,9 @@ def create_app():
     app.config["UPLOAD_FOLDER"] = os.path.join(os.path.dirname(__file__), "uploads")
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB upload limit
     app.config["ALLOWED_EXTENSIONS"] = {"kml", "kmz"}
+    app.config["POND_EDGE_SETBACK_M"] = 100.0
+    app.config["WATERWAY_BUFFER_M"] = 30.0
+    app.config["POND_MAX_SLOPE_DEG"] = 8.0
 
     # Ensure uploads directory exists
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)

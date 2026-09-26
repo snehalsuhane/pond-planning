@@ -15,8 +15,10 @@ Pipeline:
     regular elevation grid  →  slope / flow / catchment
 """
 
+import heapq
 import numpy as np
 from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
 
 
 class DEMGenerationError(ValueError):
@@ -83,6 +85,7 @@ def generate_dem(projected_contours: list, resolution: float | None = None) -> d
     Returns
     -------
     dict:
+        valid_mask    - bool grid inside the contour vertices' convex hull
         dem           - np.ndarray (rows, cols)  elevation values
         x_coords      - np.ndarray (cols,)       X axis positions (metres)
         y_coords      - np.ndarray (rows,)       Y axis positions (metres)
@@ -141,6 +144,8 @@ def generate_dem(projected_contours: list, resolution: float | None = None) -> d
         dem[nan_mask] = dem_nn[nan_mask]
 
     return {
+        "valid_mask":    ~nan_mask,
+        "extrapolated_fraction": float(nan_mask.mean()),
         "dem":           dem,
         "x_coords":      grid_x,
         "y_coords":      grid_y,
@@ -152,3 +157,122 @@ def generate_dem(projected_contours: list, resolution: float | None = None) -> d
         "elevation_min": float(np.nanmin(dem)),
         "elevation_max": float(np.nanmax(dem)),
     }
+
+
+# ---------------------------------------------------------------------------
+# DEM Conditioning for Hydrology
+# ---------------------------------------------------------------------------
+
+_NEIGHBOURS_8 = [(-1, -1), (-1, 0), (-1, 1),
+                 ( 0, -1),          ( 0, 1),
+                 ( 1, -1), ( 1, 0), ( 1, 1)]
+
+
+def fill_depressions(dem: np.ndarray, epsilon: float = 0.0,
+                     outlet_mask: np.ndarray | None = None) -> np.ndarray:
+    """
+    Fill depressions/pits in a 2D DEM using the Priority-Flood algorithm
+    (Barnes, Lehman, Mulla 2014; Wang & Liu 2006).
+
+    Floods the terrain inwards from the grid perimeter using a min-heap
+    priority queue. Every interior cell in a depression is raised to its
+    minimum spill elevation, guaranteeing a monotonic non-increasing path
+    to the boundary.
+
+    Parameters
+    ----------
+    dem : np.ndarray (rows, cols)
+        Input elevation grid.
+    outlet_mask : bool ndarray, optional
+        Known real sinks to preserve as drainage terminals.
+    epsilon : float, optional
+        Optional elevation increment added to filled cells (default 0.0).
+
+    Returns
+    -------
+    np.ndarray (rows, cols)
+        Conditioned DEM with depressions filled.
+    """
+    if dem.ndim != 2:
+        raise ValueError(f"Expected 2D DEM array, got shape {dem.shape}")
+
+    rows, cols = dem.shape
+    if rows <= 2 or cols <= 2:
+        return np.copy(dem)
+
+    filled = np.copy(dem).astype(float)
+    visited = np.zeros((rows, cols), dtype=bool)
+    heap = []
+
+    # Initialize priority queue with all boundary cells
+    for r in range(rows):
+        for c in (0, cols - 1):
+            if not visited[r, c]:
+                visited[r, c] = True
+                heapq.heappush(heap, (float(filled[r, c]) if np.isfinite(filled[r, c]) else -np.inf, r, c))
+
+    for c in range(1, cols - 1):
+        for r in (0, rows - 1):
+            if not visited[r, c]:
+                visited[r, c] = True
+                heapq.heappush(heap, (float(filled[r, c]) if np.isfinite(filled[r, c]) else -np.inf, r, c))
+
+    # Also push any NaN cells as boundary sinks if present
+    nan_mask = np.isnan(filled)
+    if nan_mask.any():
+        nan_rows, nan_cols = np.where(nan_mask)
+        for r, c in zip(nan_rows, nan_cols):
+            if not visited[r, c]:
+                visited[r, c] = True
+                heapq.heappush(heap, (-np.inf, r, c))
+
+    # Known real sinks remain drainage terminals rather than being filled away.
+    if outlet_mask is not None:
+        for r, c in np.argwhere(outlet_mask & np.isfinite(filled)):
+            if not visited[r, c]:
+                visited[r, c] = True
+                heapq.heappush(heap, (float(filled[r, c]) if np.isfinite(filled[r, c]) else -np.inf, r, c))
+
+    # Process cells from lowest spill elevation inward
+    while heap:
+        spill_elev, r, c = heapq.heappop(heap)
+
+        for dr, dc in _NEIGHBOURS_8:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and not visited[nr, nc]:
+                visited[nr, nc] = True
+                n_elev = float(filled[nr, nc])
+                if n_elev < spill_elev:
+                    new_elev = spill_elev + epsilon
+                    filled[nr, nc] = new_elev
+                    heapq.heappush(heap, (new_elev, nr, nc))
+                else:
+                    heapq.heappush(heap, (n_elev, nr, nc))
+
+    return filled
+
+
+def smooth_dem(dem: np.ndarray, sigma: float = 1.0) -> np.ndarray:
+    """
+    Lightly smooth a DEM with a Gaussian filter to reduce stair-stepping
+    and micro-pits from linear contour interpolation before hydrologic routing.
+
+    Parameters
+    ----------
+    dem : np.ndarray (rows, cols)
+        Input elevation grid.
+    sigma : float, optional
+        Gaussian kernel standard deviation (default 1.0).
+
+    Returns
+    -------
+    np.ndarray (rows, cols)
+        Smoothed elevation grid.
+    """
+    if dem.ndim != 2:
+        raise ValueError(f"Expected 2D DEM array, got shape {dem.shape}")
+
+    if sigma <= 0:
+        return np.copy(dem)
+
+    return gaussian_filter(dem.astype(float), sigma=sigma, mode="reflect")

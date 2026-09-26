@@ -36,6 +36,9 @@ def analyze_contour():
         file=file,
         upload_folder=current_app.config["UPLOAD_FOLDER"],
         allowed_extensions=current_app.config["ALLOWED_EXTENSIONS"],
+        edge_setback_m=current_app.config["POND_EDGE_SETBACK_M"],
+        water_buffer_m=current_app.config["WATERWAY_BUFFER_M"],
+        max_slope_deg=current_app.config['POND_MAX_SLOPE_DEG'],
     )
 
     return jsonify(result), status_code

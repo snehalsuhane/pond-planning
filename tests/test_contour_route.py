@@ -49,7 +49,7 @@ def _make_valid_kml() -> bytes:
         return " ".join(pts)
 
     lat_c, lon_c = 21.26, 81.29
-    contours = [(277, 0.003), (278, 0.002), (279, 0.001)]
+    contours = [(277, 0.003), (279, 0.002), (277, 0.001)]
     parts = ['<?xml version="1.0" encoding="UTF-8"?>']
     parts.append('<kml xmlns="http://www.opengis.net/kml/2.2"><Document>')
     for elev, r in contours:
@@ -66,9 +66,11 @@ VALID_KML: bytes = _make_valid_kml()
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.waterways.fetch_waterways", lambda bounds: {"elements": []})
     app = create_app()
     app.config["TESTING"] = True
+    app.config["POND_EDGE_SETBACK_M"] = 10.0
     app.config["UPLOAD_FOLDER"] = str(tmp_path)  # isolated temp dir per test
     with app.test_client() as c:
         yield c
@@ -105,13 +107,13 @@ def test_valid_kml_upload(client):
     # Pond candidates block
     assert "pond_candidates" in body
     candidates = body["pond_candidates"]
-    assert len(candidates) > 0
+    assert 0 < len(candidates) <= 5
     site = candidates[0]
     assert "latitude" in site and "longitude" in site
     assert "elevation_m" in site and "slope_deg" in site
-    assert "score" in site and "tpi" in site
+    assert "score" in site and "catchment" in site
     assert "criteria" in site
-    assert "elevation_score" in site["criteria"]
+    assert "slope_score" in site["criteria"]
     # Catchment block
     assert "catchment" in site
     catchment = site["catchment"]
@@ -119,8 +121,15 @@ def test_valid_kml_upload(client):
     assert "area_ha" in catchment
     assert "area_km2" in catchment
     assert "polygon" in catchment
-    # pour_point is intentionally NOT in catchment (lat/lon live on the candidate itself)
-    assert "pour_point" not in catchment
+    assert "footprint" not in site
+    assert site["collection_type"] in {"natural_depression", "drainage_outlet"}
+    assert "collection_point" in catchment
+    assert "geometry" in catchment
+    assert site["distance_to_domain_edge_m"] >= 10
+    assert body["waterway_screening"]["status"] == "screened_against_mapped_water"
+    assert body["planning"]["catchment_display_unit"] == "ha"
+    assert isinstance(catchment["boundary_truncated"], bool)
+    assert "drainage_score" in site["criteria"]
 
 
 # ── Error-path tests ────────────────────────────────────────────────────────
@@ -167,3 +176,32 @@ def test_malformed_kml_returns_422(client):
     )
     assert response.status_code == 422
     assert response.get_json()["status"] == "error"
+
+
+def test_waterway_lookup_failure_returns_no_recommendations(client, monkeypatch):
+    from services.waterways import WaterwayDataError
+    def fail(bounds):
+        raise WaterwayDataError('Waterway lookup failed')
+    monkeypatch.setattr('services.waterways.fetch_waterways', fail)
+    response = client.post('/api/analyzeContour', data={'contour_map': (io.BytesIO(VALID_KML), 'site.kml')},
+                           content_type='multipart/form-data')
+    assert response.status_code == 503
+    assert response.get_json()['waterway_screening']['status'] == 'unavailable'
+    assert 'pond_candidates' not in response.get_json()
+
+
+def test_kmz_upload_uses_same_route(client):
+    import zipfile
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, 'w') as archive:
+        archive.writestr('doc.kml', VALID_KML)
+    content.seek(0)
+    response = client.post('/api/analyzeContour',
+                           data={'contour_map': (content, 'site.kmz')},
+                           content_type='multipart/form-data')
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body['planning']['ranking_version'] == 'collection_targets_v3'
+    assert len(body['pond_candidates']) <= 5
+    assert body['pond_candidates'][0]['catchment']['area_ha'] > 0
+    assert 'footprint' not in body['pond_candidates'][0]

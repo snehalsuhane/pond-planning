@@ -12,6 +12,7 @@ import numpy as np
 
 from analysis.terrain import calculate_slope
 from analysis.pond import find_pond_candidate, rank_pond_candidates, PondCandidateError
+from shapely.geometry import Point, shape
 from analysis.dem import generate_dem
 from analysis.hydrology import run_hydrology
 
@@ -146,160 +147,139 @@ class TestCalculateSlope:
             calculate_slope({"dem": np.ones((3, 3))})
 
 
-# ---------------------------------------------------------------------------
-# find_pond_candidate tests
-# ---------------------------------------------------------------------------
-
-class TestFindPondCandidate:
-
-    def test_returns_dict_with_pond_site(self, dome_dem, dome_slope):
-        result = find_pond_candidate(dome_dem, dome_slope, EPSG)
-        assert "pond_site" in result
-
-    def test_pond_site_has_all_keys(self, dome_dem, dome_slope):
-        site = find_pond_candidate(dome_dem, dome_slope, EPSG)["pond_site"]
-        expected = {"latitude", "longitude", "elevation_m", "slope_deg",
-                    "grid_row", "grid_col", "score", "rank", "tpi", "criteria"}
-        assert expected.issubset(site.keys())
-        assert {"elevation_score", "slope_score", "depression_score"}.issubset(site["criteria"].keys())
-
-    def test_latitude_is_numeric(self, dome_dem, dome_slope):
-        site = find_pond_candidate(dome_dem, dome_slope, EPSG)["pond_site"]
-        assert isinstance(site["latitude"], float)
-
-    def test_longitude_is_numeric(self, dome_dem, dome_slope):
-        site = find_pond_candidate(dome_dem, dome_slope, EPSG)["pond_site"]
-        assert isinstance(site["longitude"], float)
-
-    def test_candidate_elevation_within_dem_range(self, dome_dem, dome_slope):
-        site = find_pond_candidate(dome_dem, dome_slope, EPSG)["pond_site"]
-        assert dome_dem["elevation_min"] <= site["elevation_m"] <= dome_dem["elevation_max"]
-
-    def test_candidate_slope_within_threshold(self, dome_dem, dome_slope):
-        max_slope = 8.0
-        site = find_pond_candidate(
-            dome_dem, dome_slope, EPSG, max_slope_deg=max_slope
-        )["pond_site"]
-        assert site["slope_deg"] <= max_slope
-
-    def test_grid_row_within_dem_shape(self, dome_dem, dome_slope):
-        site = find_pond_candidate(dome_dem, dome_slope, EPSG)["pond_site"]
-        rows, cols = dome_dem["shape"]
-        assert 0 <= site["grid_row"] < rows
-        assert 0 <= site["grid_col"] < cols
-
-    def test_candidate_coords_within_projected_bounds(self, dome_dem, dome_slope):
-        """The back-projected lat/lon should be geographically reasonable for EPSG:32644."""
-        site = find_pond_candidate(dome_dem, dome_slope, EPSG)["pond_site"]
-        # EPSG:32644 covers roughly lon 78–84, lat 0–84
-        assert 78.0 <= site["longitude"] <= 84.0
-        assert 0.0  <= site["latitude"]  <= 84.0
-
-    def test_different_terrain_gives_different_candidate(self):
-        """Candidate is derived from data, not hardcoded."""
-        dem_a = generate_dem(_dome_contours(cx=360000.0, cy=2350000.0), resolution=10.0)
-        dem_b = generate_dem(_dome_contours(cx=365000.0, cy=2360000.0), resolution=10.0)
-        slope_a = calculate_slope(dem_a)
-        slope_b = calculate_slope(dem_b)
-        site_a = find_pond_candidate(dem_a, slope_a, EPSG)["pond_site"]
-        site_b = find_pond_candidate(dem_b, slope_b, EPSG)["pond_site"]
-        # The selected geographic locations must differ between the two terrains
-        assert (site_a["longitude"] != site_b["longitude"] or
-                site_a["latitude"] != site_b["latitude"])
-
-    def test_lower_elevation_is_preferred(self):
-        """
-        With a simple ramp, the best site should be at the low end
-        (where elevation is lowest and slope is uniform).
-        """
-        ramp = _ramp_dem_result(rows=20, cols=20, res=5.0)
-        slope_r = calculate_slope(ramp)
-        site = find_pond_candidate(ramp, slope_r, EPSG, border_cells=1)["pond_site"]
-        # Low end of ramp → col near 0
-        assert site["grid_col"] < 10   # left half of the 20-col grid
-
-    def test_no_valid_cells_raises(self):
-        """If every cell is too steep, PondCandidateError should be raised."""
-        # Create a DEM result with very steep slope everywhere
-        steep_dem = _ramp_dem_result(rows=10, cols=10, res=1.0)
-        # Make slope result say every cell is 45°
-        steep_slope = {
-            "slope":      np.full((10, 10), 45.0),
-            "slope_min":  45.0,
-            "slope_max":  45.0,
-            "slope_mean": 45.0,
-        }
-        with pytest.raises(PondCandidateError):
-            find_pond_candidate(steep_dem, steep_slope, EPSG, max_slope_deg=5.0)
 
 
-# ---------------------------------------------------------------------------
-# rank_pond_candidates tests
-# ---------------------------------------------------------------------------
+def terrain():
+    rr,cc=np.indices((31,31))
+    z=100.+cc+abs(rr-15)
+    z[15,15]-=10
+    return {'dem':z,'resolution_m':30.,'x_coords':500000+np.arange(31)*30.,
+            'y_coords':2300000+np.arange(31)*30.}
 
-class TestRankPondCandidates:
 
-    def test_returns_top_n_candidates(self, dome_dem, dome_slope):
-        result = rank_pond_candidates(dome_dem, dome_slope, EPSG, num_candidates=3)
-        assert "pond_candidates" in result
-        candidates = result["pond_candidates"]
-        assert len(candidates) == 3
-        # Ensure ranks are 1, 2, 3
-        ranks = [c["rank"] for c in candidates]
-        assert ranks == [1, 2, 3]
-        
-    def test_candidates_are_spatially_distinct(self, dome_dem, dome_slope):
-        result = rank_pond_candidates(dome_dem, dome_slope, EPSG, num_candidates=2, min_distance_m=50.0)
-        c1, c2 = result["pond_candidates"]
-        
-        # Calculate pixel distance
-        dr = c1["grid_row"] - c2["grid_row"]
-        dc = c1["grid_col"] - c2["grid_col"]
-        dist_px = math.sqrt(dr**2 + dc**2)
-        dist_m = dist_px * dome_dem["resolution_m"]
-        assert dist_m >= 50.0
+def test_connected_catchment_recovers_upstream_area_past_pit():
+    d=terrain()
+    allowed=np.zeros((31,31),dtype=bool)
+    allowed[15,3]=True
+    h=run_hydrology(d)
+    raw=run_hydrology(d,fill_pits=False)
+    result=rank_pond_candidates(d,calculate_slope(d),32644,hydrology=h,
+                               exclusion_mask=~allowed,num_candidates=1)
+    site=result['pond_candidates'][0]
+    assert site['catchment']['area_m2']==h['flow_accumulation'][15,3]*900
+    assert h['flow_accumulation'][15,3]>raw['flow_accumulation'][15,3]
+    assert shape(site['catchment']['geometry']).covers(Point(site['longitude'],site['latitude']))
+    for removed in ['footprint','spill_point','centre','stage_storage','max_depth_m','potential_storage_m3']:
+        assert removed not in site
 
-    def test_depression_preferred(self):
-        """A local depression (basin) should be preferred over a flat area of the same elevation."""
-        from analysis.terrain import calculate_slope
-        from analysis.pond import rank_pond_candidates
-        import numpy as np
 
-        # Create a flat DEM at elevation 10.0
-        res = 5.0
-        dem = np.full((30, 30), 10.0)
-        # Create a basin in the middle (elevation 5.0)
-        dem[10:20, 10:20] = 5.0
-        # The center of the basin (15, 15) is fully flat and lowest.
-        # Let's create a second flat area at elevation 5.0 but on the edge, so it is NOT a basin
-        dem[0:5, 0:5] = 5.0
+def test_absolute_elevation_does_not_change_location_ranking():
+    d=terrain()
+    first=rank_pond_candidates(d,calculate_slope(d),32644)
+    d['dem']=d['dem']+500
+    second=rank_pond_candidates(d,calculate_slope(d),32644)
+    assert [(s['grid_row'],s['grid_col'],s['score']) for s in first['pond_candidates']]==[
+        (s['grid_row'],s['grid_col'],s['score']) for s in second['pond_candidates']]
 
-        dem_result = {
-            "dem": dem,
-            "x_coords": np.arange(30) * res,
-            "y_coords": np.arange(30) * res,
-            "resolution_m": res,
-            "shape": dem.shape,
-            "bounds": {"min_x": 0, "max_x": 150, "min_y": 0, "max_y": 150}
-        }
-        slope_result = calculate_slope(dem_result)
-        
-        # Rank candidates. The basin center should be ranked #1
-        EPSG = 32644
-        candidates = rank_pond_candidates(dem_result, slope_result, EPSG, num_candidates=2)["pond_candidates"]
-        
-        # Candidate 1 should be inside the basin (row, col near 15)
-        c1 = candidates[0]
-        assert 10 <= c1["grid_row"] < 20
-        assert 10 <= c1["grid_col"] < 20
 
-    def test_criteria_scores_sum_to_total(self, dome_dem, dome_slope):
-        """The component scores in criteria should sum to the overall score."""
-        result = rank_pond_candidates(dome_dem, dome_slope, EPSG, num_candidates=5)
-        for c in result["pond_candidates"]:
-            crit = c["criteria"]
-            component_sum = sum(crit.values())
-            # Allow small floating-point rounding (scores are rounded to 3dp each)
-            assert abs(component_sum - c["score"]) < 0.01, (
-                f"Rank #{c['rank']}: criteria sum {component_sum:.4f} != score {c['score']:.4f}"
-            )
+def test_regions_are_not_required_to_select_a_location():
+    d=terrain()
+    rr,cc=np.indices((31,31))
+    d['dem']=100.+cc+abs(rr-15)
+    result=rank_pond_candidates(d,calculate_slope(d),32644,num_candidates=1)
+    assert result['pond_candidates']
+    assert result['pond_candidates'][0]['location_type']=='preliminary_pond_outlet'
+
+
+def bowl():
+    d = terrain()
+    rr, cc = np.indices(d['dem'].shape)
+    d['dem'] = 100. + np.maximum(abs(rr-15), abs(cc-15))
+    return d
+
+
+def test_depression_collects_all_inflow_instead_of_a_single_bottom_cell():
+    d = bowl()
+    h = run_hydrology(d)
+    site = rank_pond_candidates(d, calculate_slope(d), 32644, hydrology=h,
+                               num_candidates=1, include_masks=True)['pond_candidates'][0]
+    assert site['collection_type'] == 'natural_depression'
+    assert site['assessment']['conditioning_fill_m'] > 0
+    r, c = site['grid_row'], site['grid_col']
+    assert site['catchment']['area_m2'] > h['flow_accumulation'][r, c] * 900
+    # This closed bowl has no external outlet; its whole floor is one target.
+    assert (site['_catchment_mask'][h['conditioned_dem'] > d['dem']]).all()
+    assert site['catchment']['area_m2'] == site['_catchment_mask'].sum() * 900
+    assert 'pour_point' not in site['catchment']
+    assert 'footprint' not in site
+
+
+def test_representative_location_does_not_change_depression_catchment():
+    d = bowl()
+    slopes = calculate_slope(d)
+    first = rank_pond_candidates(d, slopes, 32644, num_candidates=1, include_masks=True)['pond_candidates'][0]
+    # Make only the old representative unsuitable; the natural collection area
+    # and its drainage still exist and must not shrink to a different pixel trace.
+    slopes['slope'][first['grid_row'], first['grid_col']] = 90.
+    second = rank_pond_candidates(d, slopes, 32644, num_candidates=1, include_masks=True)['pond_candidates'][0]
+    assert (first['grid_row'], first['grid_col']) != (second['grid_row'], second['grid_col'])
+    np.testing.assert_array_equal(first['_catchment_mask'], second['_catchment_mask'])
+
+
+def test_depression_intersecting_mapped_water_is_not_a_pond_target():
+    import pytest
+    from analysis.pond import PondCandidateError
+    d = bowl()
+    water = np.zeros_like(d['dem'], dtype=bool)
+    water[15, 15] = True
+    with pytest.raises(PondCandidateError):
+        rank_pond_candidates(d, calculate_slope(d), 32644, exclusion_mask=water)
+
+
+def test_flat_surface_does_not_create_artificial_pond_outlets():
+    import pytest
+    from analysis.pond import PondCandidateError
+    d = terrain()
+    d['dem'][:] = 100.
+    with pytest.raises(PondCandidateError):
+        rank_pond_candidates(d, calculate_slope(d), 32644)
+
+
+def test_substantially_larger_drainage_is_preferred_and_duplicate_reaches_removed():
+    d = terrain()
+    rr, cc = np.indices(d['dem'].shape)
+    d['dem'] = 100. + cc + abs(rr - 15)
+    h = run_hydrology(d)
+    result = rank_pond_candidates(d, calculate_slope(d), 32644, include_masks=True)
+    sites = result['pond_candidates']
+    assert sites[0]['catchment']['area_m2'] >= .5 * h['flow_accumulation'].max() * 900
+    assert all(abs(sum(s['criteria'].values()) - s['score']) < 1e-5 for s in sites)
+    for i, site in enumerate(sites):
+        for other in sites[:i]:
+            a, b = site['_catchment_mask'], other['_catchment_mask']
+            assert (a & b).sum() / (a | b).sum() < .8
+
+
+def test_assessment_reports_upstream_water_buffer_and_filling():
+    d = terrain()
+    h = run_hydrology(d)
+    water = np.zeros_like(d['dem'], dtype=bool)
+    water[15, 20] = True
+    result = rank_pond_candidates(d, calculate_slope(d), 32644, hydrology=h,
+                                  exclusion_mask=water, include_masks=True)
+    assert any(s['assessment']['upstream_exclusion_buffer_overlap'] for s in result['pond_candidates'])
+    for site in result['pond_candidates']:
+        mask = site['_catchment_mask']
+        assessment = site['assessment']
+        assert not water[site['grid_row'], site['grid_col']]
+        assert assessment['upstream_exclusion_buffer_fraction'] == float(water[mask].mean())
+        fill = h['conditioned_dem'][mask] - d['dem'][mask]
+        assert assessment['catchment_filled_fraction'] == float((fill > 1e-6).mean())
+        assert site['catchment']['area_m2'] == mask.sum() * d['resolution_m']**2
+
+
+def test_single_candidate_wrapper_uses_the_current_ranking():
+    d = terrain()
+    slopes = calculate_slope(d)
+    site = find_pond_candidate(d, slopes, EPSG)['pond_site']
+    assert site == rank_pond_candidates(d, slopes, EPSG, num_candidates=1)['pond_candidates'][0]

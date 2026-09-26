@@ -11,7 +11,7 @@ import math
 import pytest
 import numpy as np
 
-from analysis.dem import generate_dem, DEMGenerationError
+from analysis.dem import generate_dem, DEMGenerationError, fill_depressions, smooth_dem
 
 
 # ---------------------------------------------------------------------------
@@ -222,3 +222,82 @@ class TestDEMErrors:
                 "coordinates": [[0, 0]], "projected_coordinates": []}]
         with pytest.raises(DEMGenerationError, match="projected_coordinates"):
             generate_dem(bad)
+
+
+# ---------------------------------------------------------------------------
+# fill_depressions tests
+# ---------------------------------------------------------------------------
+
+class TestFillDepressions:
+
+    def test_single_cell_pit_is_filled(self):
+        """A single interior pit surrounded by higher cells must be raised to the minimum rim."""
+        # 5x5 grid: rim at 10.0, centre at 2.0
+        dem = np.full((5, 5), 10.0)
+        dem[2, 2] = 2.0
+        filled = fill_depressions(dem)
+        assert filled[2, 2] == 10.0
+        assert np.all(filled == 10.0)
+
+    def test_multi_cell_depression_filled_to_spill(self):
+        """A multi-cell basin should fill up to its lowest spill point to the boundary."""
+        # 7x7 grid: outer edge is 10.0 except a spill notch at (0, 3) = 6.0
+        # Notch channel at (1, 3) = 6.0 into the interior basin (2:5, 2:5) at 3.0
+        dem = np.full((7, 7), 10.0)
+        dem[0, 3] = 6.0
+        dem[1, 3] = 6.0
+        dem[2:5, 2:5] = 3.0
+        filled = fill_depressions(dem)
+        # All interior depression cells should fill up to 6.0
+        assert np.all(filled[2:5, 2:5] == 6.0)
+
+    def test_monotonic_ramp_unmodified(self):
+        """A tilted plane draining to edge should not have any elevations increased."""
+        x = np.tile(np.arange(10, dtype=float), (10, 1))
+        dem = 200.0 + x * 2.0
+        filled = fill_depressions(dem)
+        assert np.allclose(dem, filled)
+
+    def test_filled_elevations_greater_than_or_equal_to_input(self):
+        """Depression filling never lowers any cell's elevation."""
+        np.random.seed(42)
+        dem = np.random.uniform(200.0, 300.0, (20, 20))
+        filled = fill_depressions(dem)
+        assert np.all(filled >= dem)
+
+    def test_small_grid_returns_copy(self):
+        dem = np.array([[1.0, 2.0], [3.0, 4.0]])
+        filled = fill_depressions(dem)
+        assert np.array_equal(dem, filled)
+
+    def test_invalid_dimension_raises(self):
+        with pytest.raises(ValueError, match="Expected 2D DEM"):
+            fill_depressions(np.ones((3, 3, 3)))
+
+
+# ---------------------------------------------------------------------------
+# smooth_dem tests
+# ---------------------------------------------------------------------------
+
+class TestSmoothDEM:
+
+    def test_smooth_shape_and_type(self):
+        dem = np.ones((10, 10))
+        smoothed = smooth_dem(dem, sigma=1.0)
+        assert smoothed.shape == (10, 10)
+        assert isinstance(smoothed, np.ndarray)
+
+    def test_smooth_reduces_variance_of_noisy_grid(self):
+        np.random.seed(42)
+        dem = 100.0 + np.random.normal(0, 5.0, (25, 25))
+        smoothed = smooth_dem(dem, sigma=1.5)
+        assert np.var(smoothed) < np.var(dem)
+
+    def test_smooth_sigma_zero_returns_copy(self):
+        dem = np.array([[1.0, 5.0], [2.0, 4.0]])
+        smoothed = smooth_dem(dem, sigma=0.0)
+        assert np.allclose(dem, smoothed)
+
+    def test_smooth_invalid_dimension_raises(self):
+        with pytest.raises(ValueError, match="Expected 2D DEM"):
+            smooth_dem(np.ones(5))

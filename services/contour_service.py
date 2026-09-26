@@ -24,7 +24,7 @@ from analysis.terrain import analyze_contours, TerrainValidationError, calculate
 from analysis.dem import generate_dem, DEMGenerationError
 from analysis.pond import rank_pond_candidates, PondCandidateError
 from analysis.hydrology import run_hydrology
-from analysis.catchment import delineate_catchment
+from services.waterways import screen_waterways, WaterwayDataError
 
 
 def _allowed_extension(filename: str, allowed_extensions: set) -> bool:
@@ -35,7 +35,9 @@ def _allowed_extension(filename: str, allowed_extensions: set) -> bool:
     )
 
 
-def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
+def handle_contour_upload(file, upload_folder: str, allowed_extensions: set,
+                          edge_setback_m: float = 100.0, water_buffer_m: float = 30.0,
+                          max_slope_deg: float = 8.0):
     """
     Validate, save, parse, and analyse a KML/KMZ upload.
 
@@ -120,20 +122,22 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
     # ── 9. Pond candidates ───────────────────────────────────────────────────
     epsg = crs_info["epsg"]
     try:
-        candidates = rank_pond_candidates(dem_result, slope_result, epsg)
+        water_mask, water_metadata = screen_waterways(dem_result, epsg, buffer_m=water_buffer_m)
+    except WaterwayDataError as exc:
+        return {"status": "error", "error": str(exc), "waterway_screening": {"status": "unavailable"}}, 503
+    try:
+        candidates = rank_pond_candidates(
+            dem_result, slope_result, epsg, hydrology=hydro,
+            exclusion_mask=water_mask, edge_setback_m=edge_setback_m,
+            max_slope_deg=max_slope_deg,
+        )
     except PondCandidateError as exc:
         return (
             {"status": "error", "error": str(exc), "filename": filename},
             422,
         )
 
-    # ── 10. Catchment for all candidates ─────────────────────────────────────
-    for candidate in candidates.get("pond_candidates", []):
-        pour_point = (candidate["grid_row"], candidate["grid_col"])
-        catchment = delineate_catchment(hydro, pour_point, dem_result, epsg)
-        candidate["catchment"] = catchment
-
-    # ── 11. Success response ──────────────────────────────────────────────────
+    # ── 10. Success response ──────────────────────────────────────────────────
     # Strip internal raster indices (grid_row / grid_col) before serialising —
     # callers only need geographic coordinates, not pixel positions.
     _INTERNAL = {"grid_row", "grid_col"}
@@ -152,6 +156,7 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
                 "resolution_m":  dem_result["resolution_m"],
                 "shape":         list(dem_result["shape"]),
                 "nan_fraction":  dem_result["nan_fraction"],
+                "extrapolated_fraction": dem_result["extrapolated_fraction"],
                 "elevation_min": dem_result["elevation_min"],
                 "elevation_max": dem_result["elevation_max"],
                 "bounds":        dem_result["bounds"],
@@ -163,6 +168,15 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set):
                 },
             },
             "pond_candidates": response_candidates,
+            "waterway_screening": water_metadata,
+            "planning": {"edge_setback_m": edge_setback_m,
+                         "assessment": "preliminary terrain screening",
+                         "drainage_saturation_ha": candidates["drainage_saturation_ha"],
+                         "outlet_snap_distance_m": 0.0, "catchment_display_unit": "ha",
+                         "catchment_model": "connected upstream drainage to a collection target",
+                         "ranking_version": "collection_targets_v3",
+                         "collection_screening": candidates["screening"],
+                         "drainage_normalization": "log1p catchment cells / log1p largest eligible catchment cells"},
             "hydrology": {
                 "noflow_count":       hydro["noflow_count"],
                 "acc_max":            hydro["acc_max"],

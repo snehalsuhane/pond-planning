@@ -100,3 +100,27 @@ class TestDelineateCatchment:
         result = delineate_catchment({"flow_direction": fdir}, (0, 0), mock, 32644)
         assert "polygon" in result
         assert "area_m2" in result
+
+
+def test_union_of_collection_inflows_does_not_double_count():
+    from analysis.catchment import trace_upstream_catchment
+    flow = np.zeros((5, 5), dtype=np.int16)
+    flow[1, :4] = flow[3, :4] = 1
+    target = np.zeros_like(flow, dtype=bool)
+    target[1, 3:5] = target[3, 3:5] = True
+    mask = trace_upstream_catchment({'flow_direction': flow}, target)
+    assert mask.sum() == 10
+
+
+def test_complete_geometry_preserves_holes_and_disconnected_parts():
+    from analysis.raster_geometry import mask_geometry
+    from shapely.geometry import shape
+    d = {'x_coords': 500000 + np.arange(31)*10.,
+         'y_coords': 2300000 + np.arange(31)*10., 'resolution_m': 10.}
+    mask = np.zeros((31, 31), dtype=bool)
+    mask[5:10, 5:10] = True
+    mask[7, 7] = False
+    mask[20, 20] = True
+    geometry = shape(mask_geometry(mask, d, 32644)['geometry'])
+    assert geometry.geom_type == 'MultiPolygon'
+    assert sum(len(part.interiors) for part in geometry.geoms) == 1

@@ -1,7 +1,7 @@
 # Village Pond Planning System — Backend
 
 A Flask-based REST API for analysing contour survey files (KML/KMZ) to assist
-in planning and sizing village ponds.
+in identifying pond locations and estimating their catchment areas.
 
 ---
 
@@ -13,13 +13,15 @@ pond-planning/
 ├── routes/
 │   └── contour.py
 ├── services/
-│   └── contour_service.py
+│   ├── contour_service.py
+│   └── waterways.py             # Existing-water screening and caching
 ├── analysis/
 │   ├── terrain.py              # Contour validation, metadata, slope
 │   ├── dem.py                  # DEM generation
 │   ├── pond.py                 # Pond candidate identification
 │   ├── hydrology.py            # D8 flow direction, accumulation, channels
 │   ├── catchment.py            # D8 catchment delineation & vectorization
+│   └── raster_geometry.py      # Cell-edge polygons, holes and multipart geometry
 ├── utils/
 │   ├── kml_parser.py
 │   └── projection.py
@@ -30,7 +32,9 @@ pond-planning/
 │   ├── test_projection.py
 │   ├── test_dem.py
 │   ├── test_pond.py
-│   └── test_hydrology.py
+│   ├── test_hydrology.py
+│   ├── test_catchment.py
+│   └── test_waterways.py
 ├── scripts/
 │   ├── verify_kml.py
 │   ├── visualize_dem.py
@@ -56,7 +60,8 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The API will be available at `http://localhost:5000`.
+The API will be available at `http://localhost:5000`. Water screening requires
+internet access or a matching response cached within the last hour.
 
 ---
 
@@ -100,6 +105,7 @@ The API will be available at `http://localhost:5000`.
 ### DEM Generation — `analysis/dem.py`
 - Converts projected contour lines into a **continuous elevation surface** on a regular grid
 - **Linear interpolation** (`scipy.griddata`) fills the grid inside the convex hull; **nearest-neighbour fill** covers edges, ensuring zero NaN cells
+- Cells outside the contour vertices' convex hull are excluded from hydrological analysis
 - Grid resolution is **auto-derived** from the data extent and snapped to the contour interval — no hardcoded values
 - The DEM array is saved as a `.npy` file in `uploads/` alongside the source KML for downstream steps
 
@@ -110,28 +116,42 @@ The API will be available at `http://localhost:5000`.
 - Slope summary is included in the API response under `dem.slope`
 
 ### Pond Candidate Identification — `analysis/pond.py`
-- Identifies the top N spatially distinct pond locations from the DEM and slope grid
-- Each cell is scored by a weighted combination of normalised criteria:
-  `score = 0.3 × elev_norm + 0.4 × slope_norm + 0.3 × depr_norm`  (lower score = better site)
-- **Depressions:** Uses Topographic Position Index (TPI) via a 100m window to strongly prefer basin-like local depressions over flat areas
-- Cells steeper than `max_slope_deg` (default 8°) and border cells are excluded
+- Identifies up to five spatially distinct pond locations from natural depressions and drainage outlets
+- Each collection target is scored by a weighted combination of normalised criteria:
+  `score = 0.75 × drainage_penalty + 0.25 × slope_penalty`  (lower score = better site)
+- **Drainage:** `1 - log(1 + N) / log(1 + Nmax)`, where N is the connected catchment cell count and Nmax is the largest eligible catchment
+- **Slope:** Mean slope over approximately 30m (at least 3 × 3 cells), divided by `max_slope_deg` and capped at 1
+- Cells steeper than `max_slope_deg` (default 8°), within the survey-edge setback (default 100m), or on mapped water are excluded
 - Implements a greedy selection algorithm ensuring all returned candidates are at least `min_distance_m` (default 100m) apart
-- Selection weights, slope threshold, and window sizes are all configurable
+- Near-duplicate catchments (intersection-over-union ≥ 80%) are skipped; remaining alternatives can overlap and should not be added as independent supplies
+- Ranking weights are screening assumptions. Pond shape, depth, capacity and rainfall–runoff calculations are outside this phase
+
+### Existing-Water Screening — `services/waterways.py`
+- Retrieves mapped rivers, streams, canals and water bodies from OpenStreetMap through Overpass
+- Applies a 30m default exclusion buffer, accounting for mapped channel width and cell size; a natural depression overlapping the buffer is rejected as a whole
+- Retries transient failures up to three times and caches complete responses for one hour in `.cache/waterways/`
+- Returns `503` when screening is unavailable; expired or incomplete data is not used
+- `OVERPASS_ENDPOINT` and `WATERWAY_CACHE_DIR` are environment overrides; slope and setback settings are in `app.py`
+- Mapping may be incomplete. Water buffers exclude candidate locations but do not alter terrain routing. © OpenStreetMap contributors
 
 ### Flow Direction, Accumulation & Channels — `analysis/hydrology.py`
 - **Integrated pipeline step:** Runs immediately after DEM/slope computation and feeds the catchment delineation module.
+- **Depression filling:** Priority-Flood raises depressions to their spill levels in the routing model; equal-elevation cells are routed towards outlets
 - Implements the **D8 (deterministic 8-direction)** algorithm: each cell is directed toward the steepest of its 8 neighbours
 - ArcGIS-standard direction codes (E=1, SE=2, S=4, SW=8, W=16, NW=32, N=64, NE=128); code 0 = pit/flat cell
 - Slope computation is **fully vectorised** using numpy array slicing over a padded DEM
-- **Flow accumulation** is computed via topological sort (BFS from headwater cells): each cell receives the sum of all upstream cells' values — conserves total flow count
+- **Flow accumulation** is computed via topological sort (BFS from headwater cells): each cell receives the sum of all upstream cells' values — conserves total flow count and rejects cycles
 - **Channel detection**: a configurable threshold selects high-accumulation cells as the drainage network; default is the 99th percentile (top 1 % of cells)
 
 ### Catchment Delineation — `analysis/catchment.py`
-- Determines the exact upstream catchment area for a selected pour point (pond candidate)
+- Determines the modeled upstream catchment area for a drainage outlet or an entire natural depression (collection target)
 - Uses a Breadth-First Search to recursively trace D8 flow directions backwards
 - Produces a boolean raster mask of the catchment
-- Converts the raster mask into a clean geographic polygon `[lon, lat]` using `contourpy`
+- Converts the raster mask into cell-edge geographic polygons `[lon, lat]` using Shapely; GeoJSON `geometry` preserves holes and multipart boundaries
 - Computes total catchment area in square metres (`area_m2`), hectares (`area_ha`), and square kilometres (`area_km2`)
+- Connected drainage assumes upstream depressions can spill; an unfilled-terrain comparison reports sensitivity to this assumption, not guaranteed water supply
+- For a natural depression, the displayed location represents the collection region; an outlet marker can lie at its catchment's downstream edge
+- Flags catchments touching the available terrain boundary and upstream mapped-water-buffer overlap; the convex hull is not a verified survey boundary
 
 ---
 
@@ -152,11 +172,15 @@ Upload (KML/KMZ)
       ↓
 [analysis/hydrology.py] →  D8 flow direction → flow accumulation → channel mask
       ↓
-[analysis/pond.py]      →  pond_candidates list (Top N ranked sites)
+[services/waterways.py] →  mapped-water exclusion mask
       ↓
-[analysis/catchment.py] →  catchment polygon and area for all candidates
+[analysis/pond.py]      →  collection targets
       ↓
-API response: terrain + DEM + pond_candidates + hydrology
+[analysis/catchment.py] →  catchment polygon and area for all targets
+      ↓
+[analysis/pond.py]      →  top 5 ranked, spatially distinct alternatives
+      ↓
+API response: terrain + DEM + pond_candidates + hydrology + waterway_screening + planning
 ```
 
 ---
@@ -166,62 +190,68 @@ API response: terrain + DEM + pond_candidates + hydrology
 ### `POST /api/analyzeContour`
 
 Accepts a KML or KMZ contour survey file, parses it, validates the terrain
-data, projects coordinates, and returns a structured metadata response.
+data, projects coordinates, and returns terrain metadata, ranked pond locations
+and catchment information.
 
 **Request** — `multipart/form-data`
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `file` | file | `.kml` or `.kmz` survey file |
+| `contour_map` | file | `.kml` or `.kmz` survey file |
 
 **Success Response** — `200 OK`
+
+Selected fields from the sample response; geometry and metadata are abbreviated.
+`geometry` contains the complete boundary; `polygon` contains the largest exterior
+ring. Only drainage-outlet catchments include `pour_point`. Internal raster
+indices are not included in the API response.
 
 ```json
 {
   "status": "success",
   "filename": "contours_1m.kml",
   "terrain": { "..." : "..." },
-  "dem": {
-    "resolution_m": 6.0, "shape": [430, 312], "nan_fraction": 0.0,
-    "elevation_min": 267.0, "elevation_max": 298.0,
-    "saved_to": "contours_1m_dem.npy",
-    "slope": { "slope_min_deg": 0.0, "slope_max_deg": 18.4, "slope_mean_deg": 3.2 }
-  },
+  "dem": { "..." : "..." },
   "pond_candidates": [
     {
       "rank": 1,
-      "latitude": 21.259564, "longitude": 81.300134,
-      "elevation_m": 274.1, "slope_deg": 4.3, "tpi": -4.8, "score": 0.283,
+      "latitude": 21.250342121857123, "longitude": 81.30335412600483,
+      "collection_type": "natural_depression",
+      "elevation_m": 283.0, "slope_deg": 0.0, "score": 0.054256,
       "criteria": {
-        "elevation_score": 0.18,
-        "slope_score": 0.11,
-        "depression_score": 0.32
+        "drainage_score": 0.049873,
+        "slope_score": 0.004384
       },
-      "grid_row": 242, "grid_col": 343,
+      "unfilled_contributing_area_ha": 1.5768,
       "catchment": {
-        "pour_point": {
-          "latitude": 21.259564,
-          "longitude": 81.300134
+        "collection_point": {
+          "latitude": 21.250342121857123,
+          "longitude": 81.30335412600483
         },
-        "area_m2": 24300.0,
-        "area_ha": 2.43,
-        "area_km2": 0.0243,
+        "area_m2": 973584.0,
+        "area_ha": 97.3584,
+        "area_km2": 0.973584,
+        "boundary_truncated": false,
+        "geometry": {
+          "...": "..."
+        },
         "polygon": [
-          [81.2995, 21.2601], [81.3005, 21.2605], [81.3012, 21.2592]
+          "..."
         ]
+      },
+      "assessment": {
+        "...": "..."
       }
     },
     {
       "rank": 2, "..." : "..."
     }
   ],
-  "hydrology": {
-    "noflow_count": 12,
-    "acc_max": 8431.0,
-    "acc_mean": 142.3,
-    "channel_threshold": 4218.0,
-    "channel_cell_count": 1345,
-    "channel_fraction": 0.0073
+  "hydrology": { "..." : "..." },
+  "waterway_screening": { "..." : "..." },
+  "planning": {
+    "ranking_version": "collection_targets_v3",
+    "...": "..."
   }
 }
 ```
@@ -230,15 +260,16 @@ data, projects coordinates, and returns a structured metadata response.
 
 | Status | Reason |
 |--------|--------|
-| `400` | Missing `file` field or empty filename |
+| `400` | Missing `contour_map` field or empty filename |
 | `415` | Unsupported file type (must be `.kml` or `.kmz`) |
-| `422` | File is malformed, unparseable, or fails terrain validation |
+| `422` | File is malformed, unparseable, fails terrain validation, or has no suitable collection target |
+| `503` | Existing-water screening is unavailable or incomplete |
 
 **cURL example**
 
 ```bash
 curl -X POST http://localhost:5000/api/analyzeContour \
-     -F "file=@/path/to/survey.kml"
+     -F "contour_map=@/path/to/survey.kml"
 ```
 
 ---
@@ -249,18 +280,19 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-177 tests across 8 test modules — all passing.
+207 tests across 9 test modules — all passing.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| `test_contour_route.py` | 5 | HTTP layer, status codes, full response shape |
-| `test_kml_parser.py` | 20 | KML/KMZ parsing, namespaces, edge cases |
-| `test_terrain.py` | 27 | Stats, interval logic, bounds, all validation errors |
-| `test_projection.py` | 33 | UTM zone selection, coordinate projection, pipeline |
-| `test_dem.py` | 28 | DEM structure, dimensions, elevation range, NaN, reusability |
-| `test_pond.py` | 25 | Slope, Top N multi-candidate ranking, TPI depression scoring |
-| `test_hydrology.py` | 32 | D8 direction codes, ramp/bowl tests, accumulation, channels |
-| `test_catchment.py` | 7 | D8 upstream tracing, raster mask, area units, polygon WGS84 bounds |
+| `test_contour_route.py` | 7 | HTTP layer, status codes, full response shape |
+| `test_kml_parser.py` | 22 | KML/KMZ parsing, namespaces, edge cases |
+| `test_terrain.py` | 25 | Stats, interval logic, bounds, all validation errors |
+| `test_projection.py` | 31 | UTM zone selection, coordinate projection, pipeline |
+| `test_dem.py` | 37 | DEM structure, dimensions, elevation range, NaN, reusability |
+| `test_pond.py` | 21 | Slope, collection targets, catchments, ranking and exclusions |
+| `test_hydrology.py` | 44 | D8 direction codes, filling, flat routing, accumulation, channels |
+| `test_catchment.py` | 9 | D8 upstream tracing, raster mask, area units, polygon WGS84 bounds |
+| `test_waterways.py` | 11 | Water buffers, geometry, incomplete results, retries and caching |
 
 ---
 
@@ -279,19 +311,23 @@ python scripts/visualize_dem.py /path/to/your/file.kml
 # outputs: dem_visualization.png
 ```
 
-To visualize the top 10 pond candidates:
+To visualize the top 5 pond candidates:
 
 ```bash
 python scripts/visualize_pond.py /path/to/your/file.kml
-# outputs: pond_candidates.png  (hillshaded DEM | slope map | TPI zoom around #1)
+# outputs: catchment_visualization.png  (locations overview | separate catchment panels)
 ```
 
-To visualize the delineated catchment areas for all 10 candidates:
+To visualize the delineated catchment areas for all 5 candidates:
 
 ```bash
 PYTHONPATH=. python scripts/visualize_catchment.py /path/to/your/file.kml
 # outputs: catchment_visualization.png
 ```
+
+The catchment panels use the same extent and scale, show connected and unfilled
+areas in hectares, and flag catchments reaching the data boundary. Survey files
+and generated plots are kept locally and excluded from Git.
 
 ---
 
@@ -306,3 +342,6 @@ PYTHONPATH=. python scripts/visualize_catchment.py /path/to/your/file.kml
 - [x] Pond candidate identification (`analysis/pond.py`)
 - [x] D8 flow direction, flow accumulation, channel detection (`analysis/hydrology.py`)
 - [x] Catchment area delineation (`analysis/catchment.py`)
+
+- [x] Existing-water screening and separate catchment visualisations
+- [ ] Rainfall–runoff estimates, soil suitability, pond sizing and field validation
