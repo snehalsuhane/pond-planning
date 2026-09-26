@@ -3,7 +3,7 @@ Pond Planning System — Flask Application Entry Point
 """
 
 import os
-from flask import Flask
+from flask import Flask, render_template
 from flask_cors import CORS
 
 from routes.contour import contour_bp
@@ -28,6 +28,10 @@ def create_app():
 
     # ── Blueprints ─────────────────────────────────────────────────────────────
     app.register_blueprint(contour_bp, url_prefix="/api")
+
+    @app.get("/")
+    def index():
+        return render_template("index.html")
 
     return app
 

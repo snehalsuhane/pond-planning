@@ -2,6 +2,8 @@
 
 A Flask-based REST API for analysing contour survey files (KML/KMZ) to assist
 in identifying pond locations and estimating their catchment areas.
+A browser interface provides contour uploads, land-boundary drawing, and
+interactive exploration of the suggested pond locations and catchments.
 
 ---
 
@@ -10,6 +12,11 @@ in identifying pond locations and estimating their catchment areas.
 ```
 pond-planning/
 ├── app.py
+├── templates/
+│   └── index.html               # Map and analysis interface
+├── static/
+│   ├── css/app.css
+│   └── js/app.js
 ├── routes/
 │   └── contour.py
 ├── services/
@@ -62,10 +69,23 @@ python app.py
 
 The API will be available at `http://localhost:5000`. Water screening requires
 internet access or a matching response cached within the last hour.
+Open the same address in a browser to upload a contour map and explore results.
+The map libraries and OpenStreetMap base map also require internet access.
 
 ---
 
 ## Implemented Features
+
+### Map Interface
+- Upload a KML/KMZ survey and analyze it through the existing API
+- Preview KML contour lines before analysis; KMZ results locate the map after analysis
+- Draw, edit, or delete one land boundary, with its approximate area shown in hectares
+- The drawn boundary is currently a visual reference; analysis covers the uploaded survey and does not yet restrict sites to the selected land
+- Explore up to five numbered pond options, with linked map markers and result cards
+- Display one catchment at a time, preserving polygon holes and multipart geometry; optionally compare all outlines
+- Show catchment hectares, local slope, coordinates, and survey-boundary/overflow qualifications
+- Provide upload validation, loading feedback, and retryable error messages on desktop and mobile
+- Public-elevation analysis and rainfall-based water volume are planned for the later integration stages
 
 ### File Upload & Validation
 - Accepts `multipart/form-data` POST requests with `.kml` or `.kmz` files
