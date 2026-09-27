@@ -16,6 +16,29 @@
   margin-bottom: 7px;
 }
 
+.search-row { display: flex; gap: 5px; }
+#place-query { min-width: 0; flex: 1; padding: 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+.search-results { list-style: none; padding: 0; margin: 8px 0; max-height: 230px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.search-result { width: 100%; text-align: left; padding: 11px; border: 0; border-bottom: 1px solid var(--line); background: white; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.search-result:hover, .search-result:focus-visible { background: #edf1e6; }
+.search-credit { font-size: 10px; color: var(--muted); }
+.search-credit a { color: inherit; }
+
+/* Interaction feedback: map gestures, tools, vertices and navigation controls. */
+#map { cursor: grab; }
+#map .leaflet-interactive { cursor: inherit; }
+#map .pond-marker, #map .leaflet-control a, select, label[for], input[type=checkbox] { cursor: pointer; }
+#map[data-dragging=true], #map[data-dragging=true] .leaflet-interactive { cursor: grabbing; }
+#map[data-zoom=in] { cursor: zoom-in; }
+#map[data-zoom=out] { cursor: zoom-out; }
+#map[data-shift=true], #map[data-tool=draw], #map[data-tool=draw] .leaflet-interactive { cursor: crosshair; }
+#map[data-tool=edit] .leaflet-interactive, #map .leaflet-editing-icon { cursor: move; }
+#map[data-tool=delete] .leaflet-interactive { cursor: not-allowed; }
+#map a.leaflet-control-zoom-in { cursor: zoom-in; }
+#map a.leaflet-control-zoom-out { cursor: zoom-out; }
+#map a.leaflet-draw-draw-polygon, #map a.leaflet-draw-draw-rectangle { cursor: crosshair; }
+#map .leaflet-control a.leaflet-disabled, button:disabled { cursor: not-allowed; }
+
 #terrain-source {
   width: 100%;
   padding: 11px 8px;
@@ -66,7 +89,7 @@ button {
 }
 
 button:disabled {
-  cursor:default;
+  cursor:not-allowed;
   opacity:.5;
 }
 

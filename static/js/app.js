@@ -14,6 +14,30 @@
   }
   const colors = ['#24594b', '#94682b', '#446c9d', '#896095', '#a95146'];
   const map = L.map('map', {worldCopyJump: true, zoomAnimation: false}).setView([20, 0], 2);
+  const mapElement = $('map');
+  map.on('draw:drawstart', () => { mapElement.dataset.tool = 'draw'; });
+  map.on('draw:editstart', () => { mapElement.dataset.tool = 'edit'; });
+  map.on('draw:deletestart', () => { mapElement.dataset.tool = 'delete'; });
+  map.on('draw:drawstop draw:editstop draw:deletestop', () => { delete mapElement.dataset.tool; });
+  map.on('dragstart', () => { mapElement.dataset.dragging = 'true'; });
+  map.on('dragend', () => { delete mapElement.dataset.dragging; });
+  let zoomCursorTimer;
+  mapElement.addEventListener('wheel', event => {
+    mapElement.dataset.zoom = event.deltaY < 0 ? 'in' : 'out';
+    clearTimeout(zoomCursorTimer);
+    zoomCursorTimer = setTimeout(() => { delete mapElement.dataset.zoom; }, 350);
+  }, {passive: true});
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Shift') mapElement.dataset.shift = 'true';
+  });
+  document.addEventListener('keyup', event => {
+    if (event.key === 'Shift') delete mapElement.dataset.shift;
+  });
+  window.addEventListener('blur', () => {
+    delete mapElement.dataset.shift;
+    delete mapElement.dataset.dragging;
+    delete mapElement.dataset.zoom;
+  });
   const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(map);
@@ -92,6 +116,63 @@
     if (isPublic()) map.removeLayer(contours); else contours.addTo(map);
   }
   sourceInput.addEventListener('change', () => { displaySource(); invalidateSelection(); });
+  let searchRequest = null, searchVersion = 0;
+  $('place-query').addEventListener('input', () => {
+    ++searchVersion;
+    searchRequest?.abort();
+    $('search-results').replaceChildren();
+    $('search-results').hidden = true;
+    $('search-status').textContent = '';
+    $('search-button').disabled = false;
+  });
+  $('place-search').addEventListener('submit', async event => {
+    event.preventDefault();
+    const query = $('place-query').value.trim();
+    if (query.length < 2) { $('search-status').textContent = 'Enter at least two characters.'; return; }
+    const version = ++searchVersion;
+    searchRequest?.abort();
+    const controller = new AbortController();
+    searchRequest = controller;
+    const timeout = setTimeout(() => controller.abort(), 25000);
+    $('search-button').disabled = true;
+    $('search-results').replaceChildren();
+    $('search-results').hidden = true;
+    $('search-status').textContent = 'Searching locations…';
+    try {
+      const response = await fetch(`/api/places/search?q=${encodeURIComponent(query)}`, {signal: controller.signal});
+      const data = await response.json();
+      if (version !== searchVersion) return;
+      if (!response.ok) throw new Error(data.error || 'Location search is unavailable. Please try again.');
+      for (const place of data.results) {
+        const button = element('button', 'search-result', place.label);
+        button.type = 'button';
+        button.addEventListener('click', () => {
+          if (place.bounds) map.stop().fitBounds(place.bounds, {padding: [45, 45], maxZoom: 16, animate: false});
+          else map.stop().setView([place.latitude, place.longitude], 15, {animate: false});
+          $('latitude').value = place.latitude;
+          $('longitude').value = place.longitude;
+          $('place-query').value = place.label.slice(0, 200);
+          $('search-results').hidden = true;
+          $('search-status').textContent = 'Location shown. Draw a boundary around the land you want to analyze.';
+          if (window.matchMedia('(max-width: 760px)').matches) mapElement.scrollIntoView({block: 'start'});
+        });
+        const item = element('li');
+        item.append(button);
+        $('search-results').append(item);
+      }
+      $('search-results').hidden = !data.results.length;
+      $('search-status').textContent = data.results.length ? 'Select a location below.' : 'No locations found. Try adding the district, state, or country.';
+    } catch (error) {
+      if (version !== searchVersion) return;
+      $('search-status').textContent = error.name === 'AbortError'
+        ? 'Location search timed out. Try again or use coordinates.'
+        : error instanceof TypeError || error instanceof SyntaxError
+          ? 'Location search is unavailable. Try again or use coordinates.' : error.message;
+    } finally {
+      clearTimeout(timeout);
+      if (version === searchVersion) { $('search-button').disabled = false; searchRequest = null; }
+    }
+  });
   $('locate-form').addEventListener('submit', event => {
     event.preventDefault();
     const lat = Number($('latitude').value), lon = Number($('longitude').value);

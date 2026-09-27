@@ -7,6 +7,7 @@ from flask import Flask, render_template
 from flask_cors import CORS
 
 from routes.contour import contour_bp
+from routes.places import places_bp
 
 
 def create_app():
@@ -28,6 +29,7 @@ def create_app():
 
     # ── Blueprints ─────────────────────────────────────────────────────────────
     app.register_blueprint(contour_bp, url_prefix="/api")
+    app.register_blueprint(places_bp, url_prefix="/api")
 
     @app.get("/")
     def index():

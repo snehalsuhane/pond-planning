@@ -32,6 +32,13 @@
       </section>
       <section class="panel">
         <h2><span class="step">02</span> Mark your land <small id="land-requirement">required</small></h2>
+        <form id="place-search" role="search">
+          <label class="field-label" for="place-query">Search a village, town, or landmark</label>
+          <div class="search-row"><input id="place-query" type="search" placeholder="Place name, district or state" minlength="2" maxlength="200" required autocomplete="off"><button id="search-button" type="submit" class="text-button">Search</button></div>
+        </form>
+        <p id="search-status" class="hint" role="status" aria-live="polite"></p>
+        <ul id="search-results" class="search-results" aria-label="Location search results" hidden></ul>
+        <p class="search-credit">Search © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> · Nominatim</p>
         <details class="explanation"><summary>Go to coordinates</summary>
           <form id="locate-form" class="coordinate-form">
             <label>Latitude<input id="latitude" type="number" step="any" min="-80" max="84" required></label>

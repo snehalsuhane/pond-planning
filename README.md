@@ -75,7 +75,7 @@ The API will be available at `http://localhost:5000`. Water screening requires
 internet access or a matching response cached within the last hour.
 Open the same address in a browser. Choose public elevation and draw your land,
 or switch to a contour survey to upload a KML/KMZ file. You can pan/zoom the map
-or use **Go to coordinates** to locate the land.
+use the place-name search bar, or use **Go to coordinates** to locate the land.
 The map libraries and OpenStreetMap base map also require internet access.
 
 ---
@@ -83,6 +83,8 @@ The map libraries and OpenStreetMap base map also require internet access.
 ## Implemented Features
 
 ### Map Interface
+- Search for a village, town, or landmark, then choose a matching location to move the map
+- Cursors distinguish panning (grab/grabbing), drawing (crosshair), editing (move), removal, clickable markers, and zoom controls
 - Analyze drawn land using public elevation without a file, or switch to contour upload
 - Upload a KML/KMZ survey and analyze it through the existing API
 - Preview KML contour lines before analysis; KMZ results locate the map after analysis
@@ -228,6 +230,21 @@ API response: terrain + DEM + pond_candidates + hydrology + waterway_screening +
 ---
 
 ## API Reference
+
+### `GET /api/places/search?q=...`
+
+Returns up to five matching locations, each with a label, latitude, longitude,
+and optional map bounds. Search is submitted explicitly with Enter or the
+Search button, not on every keystroke. Results navigate the map; they do not
+select a land boundary automatically.
+
+The [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/)
+requires attribution, identified requests, no autocomplete, and at most one
+request per second. The single-process Flask app caches queries for 24 hours
+and serializes provider requests to meet that limit. `NOMINATIM_ENDPOINT` can
+override the search URL. Multiple worker processes would require a shared
+rate limiter before deployment. Invalid queries return `400`; provider outages
+return `503`, while manual map navigation and coordinate entry remain usable.
 
 ### `POST /api/analyzeArea`
 
