@@ -99,6 +99,9 @@
     return null;
   }
   function inputError() {
+    const coefficient = Number($('runoff-coefficient').value);
+    if (!$('runoff-coefficient').value.trim() || !Number.isFinite(coefficient) || coefficient < 0 || coefficient > 1)
+      return 'Enter a runoff fraction between 0 and 1.';
     if (!isPublic()) return fileError(fileInput.files[0]);
     const boundary = land.getLayers()[0];
     if (!boundary) return 'Draw a land boundary to use public elevation.';
@@ -115,6 +118,7 @@
       : 'Pond sites must lie inside your land. Catchments can extend beyond it. Without a boundary, the whole survey is searched.';
     if (isPublic()) map.removeLayer(contours); else contours.addTo(map);
   }
+  $('runoff-coefficient').addEventListener('input', invalidateSelection);
   sourceInput.addEventListener('change', () => { displaySource(); invalidateSelection(); });
   let searchRequest = null, searchVersion = 0;
   $('place-query').addEventListener('input', () => {
@@ -223,7 +227,7 @@
     updateLand();
     $('analyze').textContent = 'Find pond locations ↗';
     const file = fileInput.files[0], error = fileError(file);
-    $('analyze').disabled = editing || !!error;
+    $('analyze').disabled = editing || !!inputError();
     $('file-info').textContent = file ? `${file.name} · ${number(file.size / 1024 / 1024)} MB` : 'Your survey supplies the elevation data.';
     $('map-caption').textContent = 'Upload a survey to locate your terrain';
     status(error || 'Survey ready. You can mark your land or run the analysis.', error && file ? 'error' : '');
@@ -238,6 +242,11 @@
     if (className) node.className = className;
     if (text !== undefined) node.textContent = text;
     return node;
+  }
+  function volumeLabel(candidate) {
+    const volume = candidate.water_volume;
+    if (!Number.isFinite(volume?.annual_m3)) return 'Water volume unavailable';
+    return `${number(volume.annual_m3, 0)} m³/year${volume.status === 'provisional' ? ' · provisional' : ' · estimated'}`;
   }
   function geometry(candidate) {
     return candidate.catchment?.geometry;
@@ -266,7 +275,7 @@
       if (window.matchMedia('(max-width: 760px)').matches) $('map').scrollIntoView({block: 'start'});
     }
     if (scroll) $('candidate-list').children[index].scrollIntoView({block: 'nearest'});
-    $('map-caption').textContent = `Option ${index + 1} · ${number(candidates[index].catchment.area_ha)} ha catchment`;
+    $('map-caption').textContent = `Option ${index + 1} · ${number(candidates[index].catchment.area_ha)} ha catchment · ${volumeLabel(candidates[index])}`;
   }
   function viewAll() {
     const bounds = markers.getBounds();
@@ -282,6 +291,11 @@
     const publicTerrain = data.planning?.terrain_scope === 'buffered_public_dem';
     $('result-meta').textContent = `${data.terrain_source?.name || data.filename} · ${number(data.dem?.resolution_m)} m terrain grid · ${data.waterway_screening?.status === 'screened_against_mapped_water' ? 'Mapped-water screening complete' : 'Water screening not confirmed'}`;
     $('source-credit').hidden = !publicTerrain;
+    const rainfall = data.rainfall;
+    $('rainfall-credit').hidden = rainfall?.status !== 'available';
+    $('rainfall-meta').textContent = rainfall?.status === 'available'
+      ? `Average rainfall: ${number(rainfall.mean_annual_mm, 0)} mm/year (${rainfall.start_year}–${rainfall.end_year}). Runoff fraction: ${number(data.water_volume_model.runoff_coefficient)}. Regional precipitation is used as a rainfall estimate for all options.`
+      : rainfall?.reason || 'Historical rainfall unavailable; water volumes could not be estimated.';
     if (data.terrain?.geometry) L.geoJSON(data.terrain.geometry, {style: {color: '#68766d', weight: 1.5, dashArray: '5 5', fillOpacity: 0}, interactive: false}).addTo(terrainExtent);
     if (data.land_selection) $('result-meta').textContent += ` · Sites within ${number(data.land_selection.area_ha)} ha of selected land`;
     const coverage = [];
@@ -305,6 +319,7 @@
       const area = element('span', 'candidate-area', `${number(candidate.catchment.area_ha)} ha `);
       area.append(element('small', '', 'catchment'));
       card.append(heading, area,
+        element('span', 'candidate-volume', volumeLabel(candidate)),
         element('span', 'candidate-info', `${number(candidate.local_slope_deg)}° local slope · ${number(candidate.elevation_m, 1)} m elevation`),
         element('span', 'candidate-info', `${candidate.latitude.toFixed(5)}, ${candidate.longitude.toFixed(5)}`));
       if (candidate.catchment.boundary_truncated) card.append(element('span', 'flag', 'Provisional area · catchment reaches terrain edge'));
@@ -312,6 +327,7 @@
       card.addEventListener('click', () => selectCandidate(i));
       $('candidate-list').append(card);
       const label = element('span', '', `Option ${i + 1} · ${number(candidate.catchment.area_ha)} ha`);
+      label.append(element('span', 'tooltip-volume', volumeLabel(candidate)));
       L.marker([candidate.latitude, candidate.longitude], {title: `Option ${i + 1}: ${title}`, alt: `Pond option ${i + 1}`})
         .bindTooltip(label, {direction: 'top', offset: [0, -17], className: 'site-tooltip'})
         .on('click', () => selectCandidate(i, true, true)).addTo(markers);
@@ -332,17 +348,18 @@
     clearResults();
     $('analyze').disabled = true;
     $('analyze').textContent = 'Analyzing terrain…';
-    status(isPublic() ? 'Retrieving elevation, checking mapped water, and tracing catchments. This can take a few minutes.'
-      : 'Analyzing terrain, checking mapped water, and tracing catchments. This can take a minute.', 'loading');
+    status(isPublic() ? 'Retrieving elevation, checking mapped water, tracing catchments, and retrieving rainfall. This can take a few minutes.'
+      : 'Analyzing terrain, checking mapped water, tracing catchments, and retrieving rainfall. This can take a minute.', 'loading');
     try {
       const boundary = land.getLayers()[0];
       let response;
       if (isPublic()) {
         response = await fetch('/api/analyzeArea', {method: 'POST', signal: controller.signal,
-          headers: {'Content-Type': 'application/json'}, body: JSON.stringify({land_area: boundary.toGeoJSON().geometry})});
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify({land_area: boundary.toGeoJSON().geometry, runoff_coefficient: Number($('runoff-coefficient').value)})});
       } else {
         const form = new FormData();
         form.append('contour_map', file);
+        form.append('runoff_coefficient', $('runoff-coefficient').value);
         if (boundary) form.append('land_area', JSON.stringify(boundary.toGeoJSON().geometry));
         response = await fetch('/api/analyzeContour', {method: 'POST', body: form, signal: controller.signal});
       }

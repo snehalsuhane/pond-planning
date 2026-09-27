@@ -11,6 +11,8 @@ from tests.test_land_selection import geographic
 
 @pytest.fixture
 def public_client(monkeypatch, tmp_path):
+    from tests.test_water_volume import fake_rainfall
+    monkeypatch.setattr('services.water_volume.fetch_rainfall', fake_rainfall)
     calls = []
     def fetch(land, buffer_m):
         calls.append(buffer_m)
@@ -106,3 +108,20 @@ def test_complete_catchment_does_not_trigger_expansion(public_client, monkeypatc
     data = client.post('/api/analyzeArea', json={'land_area': mapping(selection())}).get_json()
     assert calls == [2000]
     assert data['planning']['expansion_status'] == 'not_needed'
+
+
+@pytest.mark.parametrize('coefficient', [-1, 2, None, True, 'bad'])
+def test_invalid_runoff_rejected_before_terrain(public_client, coefficient):
+    client, calls = public_client
+    response = client.post('/api/analyzeArea', json={'land_area': mapping(selection()), 'runoff_coefficient': coefficient})
+    assert response.status_code == 400
+    assert not calls
+
+
+def test_public_volume_uses_selected_coefficient(public_client):
+    client, _ = public_client
+    data = client.post('/api/analyzeArea', json={'land_area': mapping(selection()), 'runoff_coefficient': .5}).get_json()
+    assert data['rainfall']['mean_annual_mm'] == 1000
+    assert data['water_volume_model']['runoff_coefficient'] == .5
+    for site in data['pond_candidates']:
+        assert site['water_volume']['annual_m3'] == pytest.approx(site['catchment']['area_m2'] * .5)

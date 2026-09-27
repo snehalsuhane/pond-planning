@@ -597,3 +597,8 @@ input::file-selector-button {
     animation:none;
   }
 }
+
+.candidate-volume { display: block; margin: 6px 0; color: #24594b; font-weight: 600; }
+.tooltip-volume { display: block; font-weight: 600; }
+#runoff-coefficient { width: 100%; padding: 9px 12px; border: 1px solid #ccd7d0; border-radius: 8px; font: inherit; }
+.site-tooltip { width: max-content; white-space: normal; max-width: 260px; }

@@ -11,6 +11,8 @@ from services.contour_service import handle_contour_upload
 from utils.land_selection import parse_land_area, LandSelectionError
 from services.area_service import analyze_selected_land
 
+from services.water_volume import add_water_volumes, parse_runoff_coefficient, DEFAULT_RUNOFF_COEFFICIENT
+
 contour_bp = Blueprint("contour", __name__)
 
 
@@ -22,12 +24,15 @@ def analyze_area():
         return jsonify({'status': 'error', 'error': 'Send a JSON object containing land_area (a GeoJSON Polygon).'}), 400
     try:
         land = parse_land_area(data['land_area'])
-    except LandSelectionError as exc:
+        coefficient = parse_runoff_coefficient(data.get('runoff_coefficient', DEFAULT_RUNOFF_COEFFICIENT))
+    except ValueError as exc:
         return jsonify({'status': 'error', 'error': str(exc)}), 400
     result, code = analyze_selected_land(
         land, edge_setback_m=current_app.config['POND_EDGE_SETBACK_M'],
         water_buffer_m=current_app.config['WATERWAY_BUFFER_M'],
         max_slope_deg=current_app.config['POND_MAX_SLOPE_DEG'])
+    if code == 200:
+        add_water_volumes(result, coefficient, land)
     return jsonify(result), code
 
 
@@ -50,6 +55,11 @@ def analyze_contour():
     if file.filename == "":
         return jsonify({"success": False, "error": "No file selected."}), 400
 
+    try:
+        coefficient = parse_runoff_coefficient(request.form.get('runoff_coefficient', DEFAULT_RUNOFF_COEFFICIENT))
+    except ValueError as exc:
+        return jsonify({'status': 'error', 'error': str(exc)}), 400
+
     # Optional land selection leaves existing upload-only clients unchanged.
     land_area = None
     if 'land_area' in request.form:
@@ -69,4 +79,6 @@ def analyze_contour():
         land_area=land_area,
     )
 
+    if status_code == 200:
+        add_water_volumes(result, coefficient, land_area)
     return jsonify(result), status_code

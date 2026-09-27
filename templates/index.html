@@ -51,6 +51,9 @@
         <p id="land-help" class="notice">Select up to 2,500 ha. Pond sites stay inside your land; catchments can extend outside it. Surrounding terrain is included automatically.</p>
       </section>
       <section class="panel actions">
+        <label class="field-label" for="runoff-coefficient">Runoff fraction (0–1)</label>
+        <input id="runoff-coefficient" type="number" min="0" max="1" step="any" value="0.30" required>
+        <p class="hint">0.30 assumes 30% of rainfall becomes runoff. This is an adjustable project assumption, not a measured soil property.</p>
         <button id="analyze" class="primary" disabled>Find pond locations <span aria-hidden="true">↗</span></button>
         <p id="status" role="status" aria-live="polite">Zoom to your land and draw a boundary to begin.</p>
       </section>
@@ -60,9 +63,11 @@
         <p id="source-credit" class="hint" hidden>Elevation: <a href="https://copernicus-dem-30m.s3.amazonaws.com/readme.html" target="_blank" rel="noopener">Copernicus GLO-30 · source and license</a></p>
         <p id="coverage-note" class="notice" hidden></p>
         <p class="hint">Select an option to explore its catchment. These are alternatives; overlapping areas should not be added together.</p>
+        <p id="rainfall-meta" class="notice"></p>
+        <p id="rainfall-credit" class="hint" hidden>Rainfall: <a href="https://power.larc.nasa.gov/docs/services/api/temporal/daily/" target="_blank" rel="noopener">NASA POWER historical precipitation</a></p>
         <div id="candidate-list"></div>
         <details class="explanation"><summary>How are sites ranked?</summary><p>Sites favor larger connected catchments (75%) and gentler local slopes (25%). The analysis excludes mapped water and applies slope, survey-edge, and spacing checks.</p><p>Catchments follow modeled upstream drainage, including overflow from depressions. An outlet can naturally sit at the downstream edge of its catchment.</p></details>
-        <p class="notice">Water volume will be added with rainfall data in a later stage. No pond depth or capacity is estimated here.</p>
+        <p class="notice">Annual collectible runoff = average annual rainfall × catchment area × runoff fraction. This assumes uniform rainfall and all runoff reaching the site, before storage and collection losses. It is potential inflow, not pond capacity or a guaranteed yield. No pond depth is estimated.</p>
       </section>
     </aside>
     <section class="map-panel" aria-label="Interactive planning map">

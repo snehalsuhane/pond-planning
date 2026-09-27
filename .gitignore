@@ -35,3 +35,4 @@ scratch/
 # Successful Overpass responses cached across local runs
 .cache/waterways/
 .cache/terrain/
+.cache/rainfall/

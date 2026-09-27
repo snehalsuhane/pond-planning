@@ -97,7 +97,17 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Show catchment hectares, local slope, coordinates, and survey-boundary/overflow qualifications
 - Provide upload validation, loading feedback, and retryable error messages on desktop and mobile
 - Show the terrain source, resolution, surrounding extent, and coverage qualifications; the analyzed terrain outline is available in the map layer control
-- Rainfall-based water volume is planned for the next integration stage
+- Show estimated annual collectible runoff (m³/year) on each result card and map label, with an adjustable runoff fraction
+
+### Rainfall & Water Volume — `services/rainfall.py`, `services/water_volume.py`
+- Retrieves daily corrected precipitation from [NASA POWER](https://power.larc.nasa.gov/docs/services/api/temporal/daily/) for the last ten complete calendar years, then averages the annual totals
+- Uses one regional rainfall estimate at the selection centroid, or the mean pond-site location for an upload without a boundary; this is coarse precipitation data, not a local rain-gauge measurement
+- Requires all daily values, including leap days. Missing data is never replaced with zero
+- Estimates annual collectible runoff as `rainfall_mm / 1000 × catchment_area_m2 × runoff_coefficient`
+- The default runoff coefficient is **0.30** (30% of rainfall becomes runoff), an illustrative project assumption. Users can choose a value from 0 to 1 before analysis; changing it clears previous results until analysis is rerun
+- Assumes uniform rainfall and that all modeled runoff reaches the collection target. Does not estimate pond depth, storage capacity, evaporation, seepage, or conveyance losses; this is potential annual inflow, not guaranteed yield
+- Retains the existing ranking. Volumes inherit provisional status when catchments reach the terrain edge or depend strongly on modeled depression overflow. Overlapping alternatives must not be added together
+- Caches complete rainfall responses for 30 days in `.cache/rainfall/` (`RAINFALL_CACHE_DIR` can override the directory). If rainfall retrieval fails, pond/catchment results remain available with volume marked unavailable
 
 ### Public Elevation — `services/elevation.py`
 - Retrieves [Copernicus GLO-30](https://copernicus-dem-30m.s3.amazonaws.com/readme.html) elevation windows from public Cloud Optimized GeoTIFFs; no API key is needed
@@ -167,7 +177,7 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Cells steeper than `max_slope_deg` (default 8°), within the survey-edge setback (default 100m), or on mapped water are excluded
 - Implements a greedy selection algorithm ensuring all returned candidates are at least `min_distance_m` (default 100m) apart
 - Near-duplicate catchments (intersection-over-union ≥ 80%) are skipped; remaining alternatives can overlap and should not be added as independent supplies
-- Ranking weights are screening assumptions. Pond shape, depth, capacity and rainfall–runoff calculations are outside this phase
+- Ranking weights are screening assumptions. Pond shape, depth and capacity remain outside this phase; rainfall–runoff estimates do not alter the ranking
 
 ### Existing-Water Screening — `services/waterways.py`
 - Retrieves mapped rivers, streams, canals and water bodies from OpenStreetMap through Overpass
@@ -250,6 +260,7 @@ return `503`, while manual map navigation and coordinate entry remain usable.
 
 Accepts JSON containing a required `land_area` GeoJSON Polygon (or Polygon
 Feature), with coordinates in `[longitude, latitude]` order. No upload is needed.
+An optional `runoff_coefficient` number from 0 to 1 defaults to 0.30.
 Example request using a local JSON file containing that object:
 
 ```bash
@@ -260,6 +271,13 @@ curl -X POST http://localhost:5000/api/analyzeArea \
 
 Returns `pond_candidates`, `land_selection`, `waterway_screening`, `terrain`,
 `dem`, and `planning`, plus `terrain_source` with the provider and source links.
+Both analysis routes also return `rainfall` (period, annual totals, mean annual mm,
+and query location), `water_volume_model` (formula and assumptions), and
+`water_volume` on each candidate: `{annual_m3, unit: "m3/year", status}`.
+Volume status is `estimated`, `provisional`, or `unavailable`. Rainfall failure
+keeps a successful analysis response, with `rainfall.status: "unavailable"` and
+`annual_m3: null`; a valid zero runoff coefficient produces zero volume.
+Invalid runoff coefficients return `400`.
 `planning.terrain_buffer_m` describes the final extent and
 `planning.expansion_status` reports `not_needed`, `expanded`, `limit_reached`,
 or `unavailable`. Pond coordinates and catchment geometries use WGS84; catchment
@@ -281,6 +299,7 @@ and catchment information.
 | Field | Type | Description |
 |-------|------|-------------|
 | `contour_map` | file | `.kml` or `.kmz` survey file |
+| `runoff_coefficient` | optional number | Fraction from 0 to 1; defaults to 0.30 |
 | `land_area` | optional JSON string | WGS84 GeoJSON Polygon (or Polygon Feature), using `[longitude, latitude]` coordinates; restricts collection targets, not upstream catchments |
 
 **Success Response** — `200 OK`
@@ -368,11 +387,11 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-207 tests across 9 test modules — all passing.
+301 tests across 15 test modules — all passing.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| `test_contour_route.py` | 7 | HTTP layer, status codes, full response shape |
+| `test_contour_route.py` | 18 | HTTP layer, status codes, full response shape |
 | `test_kml_parser.py` | 22 | KML/KMZ parsing, namespaces, edge cases |
 | `test_terrain.py` | 25 | Stats, interval logic, bounds, all validation errors |
 | `test_projection.py` | 31 | UTM zone selection, coordinate projection, pipeline |
@@ -380,7 +399,13 @@ python -m pytest tests/ -v
 | `test_pond.py` | 21 | Slope, collection targets, catchments, ranking and exclusions |
 | `test_hydrology.py` | 44 | D8 direction codes, filling, flat routing, accumulation, channels |
 | `test_catchment.py` | 9 | D8 upstream tracing, raster mask, area units, polygon WGS84 bounds |
-| `test_waterways.py` | 11 | Water buffers, geometry, incomplete results, retries and caching |
+| `test_waterways.py` | 13 | Water buffers, geometry, incomplete results, retries and caching |
+| `test_area_route.py` | 16 | Map-only requests, coverage expansion, selected-land containment, runoff input |
+| `test_land_selection.py` | 18 | Polygon validation and whole-cell site containment |
+| `test_elevation.py` | 10 | Public elevation windows, projection, seams, limits and caching |
+| `test_places.py` | 11 | Submitted location search, caching, rate limiting and provider failures |
+| `test_rainfall.py` | 11 | Complete calendar coverage, units, invalid days, cache and provider failures |
+| `test_water_volume.py` | 15 | Annual runoff formula, coefficient limits, provisional status and unavailable rainfall |
 
 ---
 
@@ -432,4 +457,5 @@ and generated plots are kept locally and excluded from Git.
 - [x] Catchment area delineation (`analysis/catchment.py`)
 
 - [x] Existing-water screening and separate catchment visualisations
-- [ ] Rainfall–runoff estimates, soil suitability, pond sizing and field validation
+- [x] Historical rainfall and annual runoff estimates with map labels
+- [ ] Soil suitability, pond sizing and field validation

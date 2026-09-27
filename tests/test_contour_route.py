@@ -106,6 +106,8 @@ def test_invalid_land_boundary_returns_400(client, land):
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    from tests.test_water_volume import fake_rainfall
+    monkeypatch.setattr('services.water_volume.fetch_rainfall', fake_rainfall)
     monkeypatch.setattr("services.waterways.fetch_waterways", lambda bounds: {"elements": []})
     app = create_app()
     app.config["TESTING"] = True
@@ -244,3 +246,18 @@ def test_kmz_upload_uses_same_route(client):
     assert len(body['pond_candidates']) <= 5
     assert body['pond_candidates'][0]['catchment']['area_ha'] > 0
     assert 'footprint' not in body['pond_candidates'][0]
+
+
+@pytest.mark.parametrize('coefficient', ['-1', '2', 'nan', 'abc'])
+def test_contour_invalid_runoff(client, coefficient):
+    response = client.post('/api/analyzeContour', data={'contour_map': (io.BytesIO(VALID_KML), 'test.kml'),
+                                                     'runoff_coefficient': coefficient})
+    assert response.status_code == 400
+
+
+def test_contour_volume_uses_selected_coefficient(client):
+    data = client.post('/api/analyzeContour', data={'contour_map': (io.BytesIO(VALID_KML), 'test.kml'),
+                                                  'runoff_coefficient': '0.5'}).get_json()
+    assert data['pond_candidates']
+    for site in data['pond_candidates']:
+        assert site['water_volume']['annual_m3'] == pytest.approx(site['catchment']['area_m2'] * .5)
