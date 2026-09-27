@@ -36,3 +36,5 @@ scratch/
 .cache/waterways/
 .cache/terrain/
 .cache/rainfall/
+
+*.tex
