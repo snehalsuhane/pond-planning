@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Find, design, and compare village pond sites using terrain analysis and historical rainfall.">
   <meta name="theme-color" content="#173e38">
   <title>Village Pond Planner</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -62,12 +63,11 @@
         <p id="result-meta" class="hint"></p>
         <p id="source-credit" class="hint" hidden>Elevation: <a href="https://copernicus-dem-30m.s3.amazonaws.com/readme.html" target="_blank" rel="noopener">Copernicus GLO-30 · source and license</a></p>
         <p id="coverage-note" class="notice" hidden></p>
-        <p class="hint">Select an option to explore its catchment. These are alternatives; overlapping areas should not be added together.</p>
         <p id="rainfall-meta" class="notice"></p>
         <p id="rainfall-credit" class="hint" hidden>Rainfall: <a href="https://power.larc.nasa.gov/docs/services/api/temporal/daily/" target="_blank" rel="noopener">NASA POWER historical precipitation</a></p>
         <dl class="water-quantities" aria-label="Understanding water quantities">
           <dt>Annual runoff · m³/year</dt><dd>Water potentially arriving during a year. Estimated below for each option.</dd>
-          <dt>Pond capacity · m³</dt><dd>Water a designed pond can hold at once. Use “Design this pond” to calculate it from dimensions and depth.</dd>
+          <dt>Pond capacity · m³</dt><dd>Water a designed pond can hold at once. Use "Design this pond" to calculate it from dimensions and depth.</dd>
           <dt>Stored water · m³</dt><dd>Water remaining at a particular time after inflow, losses, and use. Use the seasonal storage model after checking a pond design.</dd>
         </dl>
         <div id="candidate-list"></div>
@@ -95,7 +95,47 @@
             <button id="calculate-design" type="submit" class="primary">Calculate capacity &amp; check fit</button>
           </form>
           <p id="design-status" class="notice" role="status" aria-live="polite"></p>
+
+          <!-- ── Summary panel: catchment + footprint + depth + capacity + runoff ── -->
+          <div id="design-summary" hidden>
+            <h3 class="summary-heading">Site summary</h3>
+            <dl class="summary-grid" id="summary-stats"></dl>
+          </div>
+
           <div id="design-result" hidden></div>
+
+          <!-- ── Size alternatives panel ── -->
+          <section id="sizing-panel" hidden aria-label="Size comparison">
+            <div class="sizing-header">
+              <h3>Size alternatives</h3>
+              <button id="refresh-sizing" type="button" class="text-button">↻ Recalculate</button>
+            </div>
+            <p class="hint">Three combinations of footprint and depth evaluated against 10 years of historical rainfall at this site. Changing dimensions above recalculates this table without re-downloading terrain.</p>
+            <label class="field-label" for="target-volume">Target storage (m³, optional)</label>
+            <div class="search-row">
+              <input id="target-volume" type="number" min="0" step="any" placeholder="e.g. 500">
+              <button id="suggest-size" type="button" class="text-button">Compare</button>
+            </div>
+            <p id="sizing-status" class="hint" role="status" aria-live="polite"></p>
+            <div id="sizing-result" hidden>
+              <p id="sizing-reasoning" class="notice"></p>
+              <div id="sizing-table-wrap">
+                <table id="sizing-table" class="sizing-table" aria-label="Pond size alternatives">
+                  <thead>
+                    <tr>
+                      <th>Option</th><th>Size (m)</th><th>Depth (m)</th>
+                      <th>Capacity (m³)</th><th>Fill rate</th><th>Mean annual inflow (m³)</th>
+                      <th>Mean overflow (m³)</th><th>End-monsoon storage</th>
+                    </tr>
+                  </thead>
+                  <tbody id="sizing-tbody"></tbody>
+                </table>
+              </div>
+              <p class="hint">Fill rate: % of modelled years the pond reached capacity at least once. End-monsoon: mean stored water at end of September. Terrain ranking is separate and not affected by this comparison.</p>
+            </div>
+          </section>
+
+          <!-- ── Seasonal storage ── -->
           <section id="storage-panel" hidden aria-label="Seasonal storage">
             <h3>Seasonal stored water</h3>
             <p class="hint">Replay historical daily rainfall. These loss defaults are illustrative; adjust them for your scenario. This is not a forecast.</p>
@@ -112,13 +152,21 @@
             <div id="storage-result" hidden>
               <p id="storage-summary"></p>
               <label>Historical year <select id="storage-year"></select></label>
-              <svg id="storage-chart" viewBox="0 0 360 180" role="img" aria-label="End-of-month stored water compared with capacity"></svg>
+              <!-- Enhanced SVG chart with fill shading and axis labels -->
+              <svg id="storage-chart" viewBox="0 0 380 210" role="img" aria-label="End-of-month stored water compared with capacity"></svg>
               <label>Month to show on map <select id="storage-month"></select></label>
               <p id="storage-snapshot"></p>
+              <!-- Multi-year fill-rate mini bar chart -->
+              <div id="fillrate-section">
+                <p class="summary-subhead">Historical fill rate across all years</p>
+                <svg id="fillrate-chart" role="img" aria-label="Annual fill: years that reached capacity"></svg>
+              </div>
               <p id="storage-explanation" class="hint"></p>
             </div>
           </section>
+
           <button id="fit-design" type="button" class="text-button" hidden>Zoom to pond footprint</button>
+          <button id="download-results" type="button" class="text-button dl-button" hidden>⬇ Download results summary</button>
           <p class="hint">Solid outline: excavation rim. Dashed outline: required margin. Capacity excludes freeboard. Use the seasonal model below to estimate stored water over time.</p>
         </section>
         <details class="explanation"><summary>How are sites ranked?</summary><p>Sites favor larger connected catchments (75%) and gentler local slopes (25%). The analysis excludes mapped water and applies slope, survey-edge, and spacing checks.</p><p>Catchments follow modeled upstream drainage, including overflow from depressions. An outlet can naturally sit at the downstream edge of its catchment.</p></details>

@@ -51,7 +51,9 @@
   const pondDesign = L.featureGroup().addTo(map);
   let designRequest = null, designRevision = 0;
   let storageRequest = null, storageRevision = 0, storageData = null;
+  let sizingRequest = null, sizingRevision = 0;
   let checkedDesign = null, storageMapLabel = null;
+  let lastDesignResult = null, lastSiteCandidate = null, lastAnalysisData = null;
   L.control.layers(null, {'Contour preview': contours, 'Land boundary': land, 'Analyzed terrain': terrainExtent}, {position: 'topright'}).addTo(map);
   map.addControl(new L.Control.Draw({
     draw: {polygon: {allowIntersection: false, showArea: true, shapeOptions: {color: '#ad7e26', dashArray: '6 5'}},
@@ -96,6 +98,7 @@
     $('results').hidden = true;
     $('compare').checked = false;
     $('compare').disabled = true;
+    lastAnalysisData = null;
   }
   function fileError(file) {
     if (!file) return 'Upload a contour map to begin.';
@@ -201,7 +204,6 @@
       : inputError() || 'Ready. Run the analysis to refresh pond options.');
   }
   async function preview(file, version) {
-    // KMZ parsing stays on the backend; its map extent is available after analysis.
     if (!/\.kml$/i.test(file.name)) return;
     const xml = new DOMParser().parseFromString(await file.text(), 'application/xml');
     if (version !== revision || xml.getElementsByTagName('parsererror').length) return;
@@ -293,8 +295,8 @@
     if (bounds.isValid()) map.stop().fitBounds(bounds, {padding: [55, 65], maxZoom: 17, animate: false});
   }
   function showResults(data) {
-    // Contours remain available in the layer control, but can obscure catchments.
     map.removeLayer(contours);
+    lastAnalysisData = data;
     candidates = (data.pond_candidates || []).slice(0, 5);
     $('results').hidden = false;
     $('result-count').textContent = String(candidates.length);
@@ -348,11 +350,39 @@
     if (candidates.length) selectCandidate(0);
     else $('candidate-list').append(element('p', 'notice', 'No suitable pond locations were found. Try a different boundary or contour map.'));
   }
+
+  // ── Site summary panel ──────────────────────────────────────────────────────
+  function showSiteSummary(designData, site) {
+    const dl = $('summary-stats');
+    dl.replaceChildren();
+    function row(label, value, sub) {
+      const dt = element('dt', 'summary-label', label);
+      const dd = element('dd', 'summary-value', value);
+      if (sub) dd.append(element('span', 'summary-sub', sub));
+      dl.append(dt, dd);
+    }
+    row('Location', `${site.latitude.toFixed(5)}, ${site.longitude.toFixed(5)}`);
+    row('Catchment area', `${number(site.catchment.area_ha)} ha`);
+    row('Annual runoff (est.)', volumeLabel(site).replace('Estimated annual runoff: ', ''));
+    row('Excavation depth', `${number(designData.dimensions.depth_m)} m`, `${number(designData.water_depth_m)} m water depth`);
+    row('Footprint', `${number(designData.dimensions.length_m)} × ${number(designData.dimensions.width_m)} m`, `${number(designData.footprint_area_m2)} m² rim area`);
+    row('Proposed capacity', `${number(designData.capacity_m3, 0)} m³`, 'below freeboard');
+    row('Fit status', designData.screening_status === 'passes_checks' ? '✓ Passes land & water checks' :
+      designData.screening_status === 'does_not_fit' ? '✗ Does not fit — revise design' : '⚠ Water check unavailable');
+    $('design-summary').hidden = false;
+  }
+
   function clearDesign(close = true) {
     clearStorage();
+    clearSizing();
     checkedDesign = null;
     storageMapLabel = null;
+    lastDesignResult = null;
+    lastSiteCandidate = null;
     $('storage-panel').hidden = true;
+    $('sizing-panel').hidden = true;
+    $('design-summary').hidden = true;
+    $('summary-stats').replaceChildren();
     ++designRevision;
     designRequest?.abort();
     designRequest = null;
@@ -364,6 +394,7 @@
     $('design-result').replaceChildren();
     $('design-result').hidden = true;
     $('fit-design').hidden = true;
+    $('download-results').hidden = true;
     $('calculate-design').disabled = false;
     $('design-status').textContent = '';
     if (close) $('pond-design').hidden = true;
@@ -423,10 +454,15 @@
         element('p', 'hint', volumeLabel(site)),
         element('p', 'hint', data.assumptions));
       if (data.waterway_screening?.coverage_note) $('design-result').append(element('p', 'hint', data.waterway_screening.coverage_note));
+      lastDesignResult = data;
+      lastSiteCandidate = site;
+      showSiteSummary(data, site);
       checkedDesign = passed ? body : null;
       $('storage-panel').hidden = !passed;
+      $('sizing-panel').hidden = false;
       $('design-result').hidden = false;
       $('fit-design').hidden = false;
+      $('download-results').hidden = false;
       $('map-caption').textContent = `Pond option ${selected + 1} · Proposed capacity ${number(data.capacity_m3, 0)} m³ · ${passed ? 'Map checks passed' : 'Design needs review'}`;
     } catch (error) {
       if (version !== designRevision) return;
@@ -437,6 +473,8 @@
       if (version === designRevision) { designRequest = null; $('calculate-design').disabled = false; }
     }
   });
+
+  // ── Storage simulation ──────────────────────────────────────────────────────
   function clearStorage() {
     ++storageRevision;
     storageRequest?.abort();
@@ -451,6 +489,92 @@
     clearStorage();
     $('storage-status').textContent = 'Assumptions changed. Run the simulation again.';
   });
+
+  function renderStorageChart(rows, cap, selectedMonth) {
+    const svg = $('storage-chart');
+    svg.replaceChildren();
+    const W = 380, H = 210, PL = 48, PR = 10, PT = 28, PB = 32;
+    const chartW = W - PL - PR, chartH = H - PT - PB;
+    const ns = 'http://www.w3.org/2000/svg';
+    function node(tag, attrs, text) {
+      const el = document.createElementNS(ns, tag);
+      Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+      if (text !== undefined) el.textContent = text;
+      svg.append(el);
+      return el;
+    }
+    node('title', {}, `End-of-month stored water, capacity ${number(cap, 0)} m³`);
+    // Fill area under curve
+    const pts = rows.map((r, i) => [PL + i * (chartW / (rows.length - 1 || 1)), PT + chartH - chartH * r.end_storage_m3 / cap]);
+    const area = [...pts.map(([x, y]) => `${x},${y}`), `${pts.at(-1)[0]},${PT + chartH}`, `${PL},${PT + chartH}`].join(' ');
+    node('polygon', {points: area, fill: '#167c8622', stroke: 'none'});
+    // Capacity line
+    node('line', {x1: PL, y1: PT, x2: PL + chartW, y2: PT, stroke: '#9cae98', 'stroke-dasharray': '5 4', 'stroke-width': 1});
+    node('text', {x: PL + 2, y: PT - 6, 'font-size': 10, fill: '#68766d'}, `Cap. ${number(cap, 0)} m³`);
+    // Zero line
+    node('line', {x1: PL, y1: PT + chartH, x2: PL + chartW, y2: PT + chartH, stroke: '#d5dccf', 'stroke-width': 1});
+    // Y-axis ticks
+    [0, 0.25, 0.5, 0.75, 1].forEach(frac => {
+      const y = PT + chartH - chartH * frac;
+      node('line', {x1: PL - 4, y1: y, x2: PL, y2: y, stroke: '#9cae98', 'stroke-width': 1});
+      node('text', {x: PL - 6, y: y + 4, 'font-size': 9, fill: '#68766d', 'text-anchor': 'end'}, `${Math.round(frac * 100)}%`);
+    });
+    // Curve
+    node('polyline', {points: pts.map(([x, y]) => `${x},${y}`).join(' '), fill: 'none', stroke: '#167c86', 'stroke-width': 2.5, 'stroke-linejoin': 'round'});
+    // Month dots and labels
+    const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
+    rows.forEach((r, i) => {
+      const [cx, cy] = pts[i];
+      const isSel = i === selectedMonth;
+      node('circle', {cx, cy, r: isSel ? 5.5 : 2.5, fill: '#167c86', stroke: isSel ? '#fff' : 'none', 'stroke-width': isSel ? 2 : 0});
+      if (rows.length <= 12) node('text', {x: cx, y: PT + chartH + 14, 'font-size': 9, fill: '#68766d', 'text-anchor': 'middle'}, months[i]);
+    });
+    // Y-axis label
+    const lbl = document.createElementNS(ns, 'text');
+    lbl.setAttribute('transform', `rotate(-90,12,${PT + chartH / 2})`);
+    lbl.setAttribute('x', 0); lbl.setAttribute('y', 0);
+    lbl.setAttribute('font-size', 9); lbl.setAttribute('fill', '#68766d');
+    lbl.setAttribute('text-anchor', 'middle');
+    lbl.setAttribute('dominant-baseline', 'central');
+    lbl.textContent = '% full';
+    lbl.setAttribute('transform', `translate(12,${PT + chartH / 2}) rotate(-90)`);
+    svg.append(lbl);
+  }
+
+  function renderFillRateChart(annualRows, cap) {
+    const svg = $('fillrate-chart');
+    svg.replaceChildren();
+    const n = annualRows.length;
+    if (!n) return;
+    const barW = Math.min(20, Math.floor(340 / n) - 2);
+    const svgW = n * (barW + 2) + 20;
+    const svgH = 48;
+    svg.setAttribute('viewBox', `0 0 ${svgW} ${svgH}`);
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('style', 'display:block;margin:8px 0');
+    const ns = 'http://www.w3.org/2000/svg';
+    function node(tag, attrs, text) {
+      const el = document.createElementNS(ns, tag);
+      Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+      if (text !== undefined) el.textContent = text;
+      svg.append(el);
+      return el;
+    }
+    annualRows.forEach((row, i) => {
+      const filled = row.days_full > 0;
+      const x = 10 + i * (barW + 2);
+      const barH = filled ? 24 : 8;
+      const y = 26 - barH;
+      node('rect', {x, y, width: barW, height: barH, rx: 2, fill: filled ? '#167c86' : '#d5dccf'});
+      if (i === 0 || i === n - 1 || n <= 8) {
+        node('text', {x: x + barW / 2, y: 40, 'font-size': 8, fill: '#68766d', 'text-anchor': 'middle'}, String(row.year));
+      }
+    });
+    const filled = annualRows.filter(r => r.days_full > 0).length;
+    node('text', {x: svgW - 2, y: 10, 'font-size': 9, fill: '#24594b', 'text-anchor': 'end', 'font-weight': '600'},
+      `${filled}/${n} years filled`);
+  }
+
   function renderStorage() {
     if (!storageData) return;
     const year = $('storage-year').value;
@@ -458,28 +582,19 @@
     const row = rows[Number($('storage-month').value)];
     const annual = storageData.annual.find(item => String(item.year) === year);
     const cap = storageData.capacity_m3;
-    $('storage-summary').textContent = `${storageData.annual.filter(item => item.days_full > 0).length} of ${storageData.annual.length} historical years reached capacity. ${year}: overflow ${number(annual.overflow_m3, 0)} m³; water use supplied ${number(annual.supplied_m3, 0)} m³; unmet use ${number(annual.unmet_demand_m3, 0)} m³.`;
+    const seasonal = storageData.seasonal?.summary;
+    let summaryText = `${storageData.annual.filter(item => item.days_full > 0).length} of ${storageData.annual.length} historical years reached capacity.`;
+    if (seasonal) {
+      summaryText += ` Fill rate: ${number(seasonal.fill_rate_pct, 0)}%. Mean annual overflow: ${number(seasonal.mean_annual_overflow_m3, 0)} m³.`;
+      if (seasonal.mean_end_monsoon_storage_pct !== null) summaryText += ` Typical end-of-monsoon storage: ${number(seasonal.mean_end_monsoon_storage_pct, 0)}% full.`;
+    }
+    summaryText += ` ${year}: overflow ${number(annual.overflow_m3, 0)} m³; water use supplied ${number(annual.supplied_m3, 0)} m³; unmet use ${number(annual.unmet_demand_m3, 0)} m³.`;
+    $('storage-summary').textContent = summaryText;
     const snapshot = `${row.month} month end: estimated stored water ${number(row.end_storage_m3, 0)} m³ (${number(100 * row.end_storage_m3 / cap, 0)}% full)`;
     $('storage-snapshot').textContent = `${snapshot}. Monthly inflow ${number(row.inflow_m3, 0)} m³; overflow ${number(row.overflow_m3, 0)} m³; evaporation ${number(row.evaporation_m3, 0)} m³; seepage ${number(row.seepage_m3, 0)} m³.`;
     if (storageMapLabel) storageMapLabel.textContent = snapshot;
-    const svg = $('storage-chart');
-    svg.replaceChildren();
-    const node = (tag, attrs, text) => {
-      const item = document.createElementNS('http://www.w3.org/2000/svg', tag);
-      Object.entries(attrs).forEach(([key, value]) => item.setAttribute(key, value));
-      if (text) item.textContent = text;
-      svg.append(item);
-      return item;
-    };
-    node('title', {}, `End-of-month stored water in ${year}, capacity ${number(cap, 0)} cubic metres`);
-    node('line', {x1: 15, y1: 30, x2: 345, y2: 30, stroke: '#88988e', 'stroke-dasharray': '5 4'});
-    node('text', {x: 15, y: 18}, `Capacity ${number(cap, 0)} m³`);
-    node('polyline', {points: rows.map((r, i) => `${15+i*30},${145-115*r.end_storage_m3/cap}`).join(' '), fill: 'none', stroke: '#167c86', 'stroke-width': 3});
-    rows.forEach((r, i) => node('circle', {cx: 15+i*30, cy: 145-115*r.end_storage_m3/cap,
-      r: i === Number($('storage-month').value) ? 5 : 2, fill: '#167c86'}));
-    node('text', {x: 15, y: 172}, 'Jan');
-    node('text', {x: 310, y: 172}, 'Dec');
-    node('text', {x: 15, y: 158}, '0 m³');
+    renderStorageChart(rows, cap, Number($('storage-month').value));
+    renderFillRateChart(storageData.annual, cap);
   }
   $('storage-year').addEventListener('change', renderStorage);
   $('storage-month').addEventListener('change', renderStorage);
@@ -516,6 +631,168 @@
       if (version === storageRevision) { storageRequest = null; $('calculate-storage').disabled = false; }
     }
   });
+
+  // ── Size alternatives ───────────────────────────────────────────────────────
+  function clearSizing() {
+    ++sizingRevision;
+    sizingRequest?.abort();
+    sizingRequest = null;
+    $('sizing-result').hidden = true;
+    $('sizing-status').textContent = '';
+    $('sizing-tbody').replaceChildren();
+  }
+
+  async function runSizing() {
+    if (!candidates.length || !land.getLayers().length) return;
+    clearSizing();
+    const version = sizingRevision;
+    const controller = new AbortController();
+    sizingRequest = controller;
+    const timeout = setTimeout(() => controller.abort(), 90000);
+    const site = candidates[selected];
+    const targetRaw = $('target-volume').value.trim();
+    const body = {
+      site: {latitude: site.latitude, longitude: site.longitude},
+      land_area: land.getLayers()[0].toGeoJSON().geometry,
+      catchment: site.catchment.geometry,
+      runoff_coefficient: Number($('runoff-coefficient').value),
+    };
+    if (targetRaw) body.target_volume_m3 = Number(targetRaw);
+    $('suggest-size').disabled = true;
+    $('sizing-status').textContent = 'Evaluating size alternatives against 10 years of historical rainfall…';
+    try {
+      const response = await fetch('/api/suggestSize', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body), signal: controller.signal});
+      const data = await response.json();
+      if (version !== sizingRevision) return;
+      if (!response.ok) throw new Error(data.error || 'Size comparison failed.');
+      $('sizing-reasoning').textContent = data.reasoning;
+      const tbody = $('sizing-tbody');
+      tbody.replaceChildren();
+      data.alternatives.forEach(alt => {
+        const tr = document.createElement('tr');
+        const isRec = alt.label === 'recommended' || (data.recommended && alt.capacity_m3 === data.recommended.capacity_m3 && alt.label === data.recommended.label);
+        if (isRec) tr.className = 'sizing-recommended';
+        const pct = alt.mean_end_monsoon_storage_pct !== null ? `${number(alt.mean_end_monsoon_storage_pct, 0)}%` : '—';
+        tr.innerHTML = `
+          <td><span class="sizing-label sizing-label--${alt.label}">${alt.label.replace('_', ' ')}${isRec ? ' ★' : ''}</span></td>
+          <td>${number(alt.length_m)} × ${number(alt.width_m)}</td>
+          <td>${number(alt.depth_m)}</td>
+          <td>${number(alt.capacity_m3, 0)}</td>
+          <td>${number(alt.fill_rate_pct, 0)}%</td>
+          <td>${number(alt.mean_annual_inflow_m3, 0)}</td>
+          <td>${number(alt.mean_annual_overflow_m3, 0)}</td>
+          <td>${pct}</td>`;
+        tbody.append(tr);
+      });
+      $('sizing-result').hidden = false;
+      $('sizing-status').textContent = `${data.mode === 'target' ? 'Target mode' : 'Alternatives mode'} · ${data.alternatives.length} options evaluated against ${data.rainfall?.end_year - data.rainfall?.start_year + 1 || 10} years of rainfall.`;
+    } catch (error) {
+      if (version !== sizingRevision) return;
+      $('sizing-status').textContent = error.name === 'AbortError' ? 'Size comparison timed out. Please retry.'
+        : error instanceof TypeError || error instanceof SyntaxError ? 'Sizing service unavailable. Please retry.' : error.message;
+    } finally {
+      clearTimeout(timeout);
+      if (version === sizingRevision) { sizingRequest = null; $('suggest-size').disabled = false; }
+    }
+  }
+  $('suggest-size').addEventListener('click', runSizing);
+  $('refresh-sizing').addEventListener('click', runSizing);
+
+  // ── Download results summary ────────────────────────────────────────────────
+  $('download-results').addEventListener('click', () => {
+    if (!lastDesignResult || !lastSiteCandidate) return;
+    const site = lastSiteCandidate;
+    const design = lastDesignResult;
+    const rainfall = lastAnalysisData?.rainfall;
+    const seasonal = storageData?.seasonal?.summary;
+    const now = new Date().toISOString().slice(0, 10);
+
+    const rows = (label, value) => `<tr><th scope="row">${label}</th><td>${value}</td></tr>`;
+    const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Pond Planning Summary — ${now}</title>
+<style>
+  body{font-family:system-ui,sans-serif;font-size:13px;color:#203d36;max-width:780px;margin:32px auto;padding:0 24px}
+  h1{font-size:22px;margin:0 0 4px}
+  .meta{color:#68766d;font-size:12px;margin:0 0 28px}
+  h2{font-size:14px;border-bottom:1px solid #e0e5da;padding-bottom:6px;margin:24px 0 10px}
+  table{border-collapse:collapse;width:100%;margin-bottom:16px}
+  th,td{padding:7px 10px;text-align:left;border-bottom:1px solid #e0e5da;font-weight:400}
+  th[scope=row]{color:#68766d;width:46%;font-size:12px}
+  .notice{background:#edf0e5;border-radius:6px;padding:10px 14px;font-size:12px;color:#586448;margin:16px 0}
+  footer{font-size:11px;color:#68766d;margin-top:32px;border-top:1px solid #e0e5da;padding-top:12px}
+</style></head><body>
+<h1>Village Pond Planner — Results Summary</h1>
+<p class="meta">Generated ${now} · This is an illustrative planning scenario, not a construction specification or guaranteed yield.</p>
+
+<h2>Selected site — Option ${selected + 1}</h2>
+<table>
+  ${rows('Location', `${site.latitude.toFixed(5)}° N, ${site.longitude.toFixed(5)}° E`)}
+  ${rows('Collection type', site.collection_type === 'natural_depression' ? 'Natural depression' : 'Drainage outlet')}
+  ${rows('Catchment area', `${number(site.catchment.area_ha)} ha`)}
+  ${rows('Local slope', `${number(site.local_slope_deg)}°`)}
+  ${rows('Elevation', `${number(site.elevation_m, 1)} m`)}
+  ${rows('Annual runoff (estimated)', volumeLabel(site))}
+</table>
+
+<h2>Rainfall data</h2>
+<table>
+  ${rainfall ? rows('Source', rainfall.source || 'NASA POWER') : ''}
+  ${rainfall ? rows('Period', `${rainfall.start_year}–${rainfall.end_year}`) : ''}
+  ${rainfall ? rows('Mean annual rainfall', `${number(rainfall.mean_annual_mm, 0)} mm/year`) : ''}
+  ${rows('Runoff fraction used', $('runoff-coefficient').value)}
+</table>
+
+<h2>Proposed pond design</h2>
+<table>
+  ${rows('Top rim dimensions', `${number(design.dimensions.length_m)} × ${number(design.dimensions.width_m)} m`)}
+  ${rows('Excavation depth', `${number(design.dimensions.depth_m)} m`)}
+  ${rows('Water depth (below freeboard)', `${number(design.water_depth_m)} m`)}
+  ${rows('Side slope', `${number(design.dimensions.side_slope)}:1 H:V`)}
+  ${rows('Freeboard', `${number(design.dimensions.freeboard_m)} m`)}
+  ${rows('Margin around rim', `${number(design.dimensions.margin_m)} m`)}
+  ${rows('Bottom dimensions', `${number(design.bottom_length_m)} × ${number(design.bottom_width_m)} m`)}
+  ${rows('Footprint area', `${number(design.footprint_area_m2)} m²`)}
+  ${rows('Proposed capacity', `${number(design.capacity_m3, 0)} m³`)}
+  ${rows('Fit status', design.screening_status === 'passes_checks' ? 'Passes land and mapped-water checks' : design.screening_status === 'does_not_fit' ? 'Does not fit — design needs revision' : 'Water check unavailable')}
+</table>
+
+${storageData ? `<h2>Seasonal storage simulation</h2>
+<p class="notice">Loss defaults: evaporation ${storageData.assumptions?.evaporation_mm_day ?? '—'} mm/day · seepage ${storageData.assumptions?.seepage_mm_day ?? '—'} mm/day · daily demand ${storageData.assumptions?.demand_m3_day ?? '—'} m³/day. These are illustrative, not measured values.</p>
+<table>
+  ${seasonal ? rows('Fill rate', `${number(seasonal.fill_rate_pct, 0)}% of modelled years reached capacity`) : ''}
+  ${seasonal ? rows('Mean annual overflow', `${number(seasonal.mean_annual_overflow_m3, 0)} m³`) : ''}
+  ${seasonal?.mean_end_monsoon_storage_pct !== null ? rows('Mean end-of-monsoon storage', `${number(seasonal.mean_end_monsoon_storage_pct, 0)}% of capacity`) : ''}
+  ${rows('Years analysed', String(storageData.annual.length))}
+  ${rows('Years at capacity', String(storageData.annual.filter(r => r.days_full > 0).length))}
+  ${rows('Total period inflow', `${number(storageData.totals.inflow_m3, 0)} m³`)}
+  ${rows('Total period overflow', `${number(storageData.totals.overflow_m3, 0)} m³`)}
+</table>` : ''}
+
+<h2>Assumptions and limitations</h2>
+<p class="notice">
+  Terrain: ${lastAnalysisData?.terrain_source?.name || 'contour survey'}.
+  Rainfall: regional daily precipitation from NASA POWER; not a local rain gauge.
+  Storage model: daily mass balance with uniform rainfall and constant runoff fraction. Not a forecast.
+  Pond dimensions assume level ground and a flat bottom. Ground stability, inlet/outlet design and earthworks on sloping terrain are not assessed.
+  Catchments trace modelled upstream drainage; boundaries are provisional where they reach the terrain edge.
+  Pond ranking is based on catchment size and local slope; it does not reflect design suitability or water availability.
+  Mapped-water screening uses OpenStreetMap data, which may be incomplete.
+</p>
+
+<footer>Village Pond Planner · ${window.location.origin} · Generated ${new Date().toLocaleString()}</footer>
+</body></html>`;
+    const blob = new Blob([html], {type: 'text/html'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pond-planning-summary-${now}.html`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 2000);
+  });
+
   $('compare').addEventListener('change', () => selectCandidate(selected, false));
   $('fit-results').addEventListener('click', viewAll);
   $('analyze').addEventListener('click', async () => {

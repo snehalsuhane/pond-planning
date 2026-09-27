@@ -25,7 +25,11 @@ pond-planning/
 │   ├── contour_service.py
 │   ├── area_service.py          # Selected-land analysis using public terrain
 │   ├── elevation.py             # Copernicus raster retrieval and caching
-│   └── waterways.py             # Existing-water screening and caching
+│   ├── waterways.py             # Existing-water screening and caching
+│   ├── pond_design.py           # Excavation geometry and land/water checks
+│   ├── storage.py               # Daily water balance and seasonal summaries
+│   ├── sizing.py                # Pond-size recommendation engine
+│   └── rainfall.py              # NASA POWER daily precipitation
 ├── analysis/
 │   ├── terrain.py              # Contour validation, metadata, slope
 │   ├── dem.py                  # DEM generation
@@ -45,7 +49,10 @@ pond-planning/
 │   ├── test_pond.py
 │   ├── test_hydrology.py
 │   ├── test_catchment.py
-│   └── test_waterways.py
+│   ├── test_waterways.py
+│   ├── test_storage.py
+│   ├── test_sizing.py
+│   └── ...
 ├── scripts/
 │   ├── verify_kml.py
 │   ├── visualize_dem.py
@@ -99,6 +106,16 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Show the terrain source, resolution, surrounding extent, and coverage qualifications; the analyzed terrain outline is available in the map layer control
 - Show estimated annual collectible runoff (m³/year) on each result card and map label, with an adjustable runoff fraction
 - Explain annual runoff, pond capacity, and stored water separately; capacity is calculated in the pond-design panel, and historical stored water is estimated in its seasonal model
+
+### Pond-Size Recommendation — `services/sizing.py`
+- Evaluates a small grid of excavation lengths, widths and depths (3 × 3 × 2 = 18 cells by default) that fit the site and margin
+- Runs the full historical seasonal water balance for every candidate using the same daily-rainfall and loss model as `/api/simulatePond`
+- **With a target volume**: recommends the smallest evaluated design that meets or exceeds the target, plus the next step up. Reports whether historical runoff fills it and what the fill rate is across the ten modelled years
+- **Without a target**: returns three labelled alternatives — small, intermediate, and large — and selects the intermediate tier as the default unless historical runoff never fills it (in which case it falls back to small). Explains the choice transparently rather than implying one uniquely correct answer
+- Direct rain on each candidate's excavation rim is included in inflow; its area is subtracted from catchment runoff to avoid double-counting, matching the approach in `/api/simulatePond`
+- Terrain suitability ranking is kept separate; volume is not added to the existing catchment-based score, which would effectively count catchment area twice
+- Capacity uses the same trapezoidal prismatoid formula as `/api/designPond`. Side slope, freeboard and margin are fixed at the grid defaults (2:1, 0.5 m, 5 m) to keep the comparison consistent
+- Loss defaults and grid dimensions are clearly labelled module-level constants, easy to adjust without touching any other logic
 
 ### Rainfall & Water Volume — `services/rainfall.py`, `services/water_volume.py`
 - Retrieves daily corrected precipitation from [NASA POWER](https://power.larc.nasa.gov/docs/services/api/temporal/daily/) for the last ten complete calendar years, then averages the annual totals
@@ -250,6 +267,16 @@ Upload (KML/KMZ)
 [analysis/pond.py]      →  top 5 ranked, spatially distinct alternatives
       ↓
 API response: terrain + DEM + pond_candidates + hydrology + waterway_screening + planning
+
+Pond-size recommendation (independent pipeline, reuses cached rainfall):
+
+[services/sizing.py]    →  candidate grid (lengths × widths × depths)
+      ↓
+[services/storage.py]   →  daily water balance per candidate
+      ↓
+[services/storage.py]   →  seasonal summary (fill rate, overflow, end-monsoon storage)
+      ↓
+API response: alternatives + recommended + reasoning + assumptions
 ```
 
 ---
@@ -350,6 +377,43 @@ storage values. The existing design remains visible when simulation fails.
 
 Loss defaults are illustrative, not local measurements. Results inherit catchment
 uncertainty and are historical scenarios, not forecasts or guaranteed yields.
+
+### `POST /api/suggestSize`
+
+Accepts the same required inputs as `/api/simulatePond` — `site`, `land_area`,
+and a `catchment` GeoJSON Polygon or MultiPolygon — plus the same optional
+hydrological parameters (`runoff_coefficient`, `evaporation_mm_day`,
+`seepage_mm_day`, `demand_m3_day`, `initial_storage_fraction`).
+
+An optional `target_volume_m3` (non-negative float) switches the response mode:
+
+**With `target_volume_m3`** (`mode: "target"`):
+- Returns the smallest evaluated design that reaches the requested capacity, labelled
+  `recommended`, plus the next step up labelled `next_step_up` if one exists
+- Reports whether historical runoff fills it and the fill rate across modelled years
+- When no evaluated design meets the target, returns the largest available with label
+  `largest_available` and `recommended: null`
+
+**Without `target_volume_m3`** (`mode: "alternatives"`):
+- Returns up to three labelled alternatives: `small`, `intermediate`, and `large`
+- Selects `intermediate` as the default (`recommended`) unless historical runoff
+  never fills it, in which case it falls back to `small`
+- Provides a `reasoning` string that explains the default choice transparently
+
+Each alternative contains: `label`, `length_m`, `width_m`, `depth_m`,
+`capacity_m3`, `fill_rate_pct`, `years_pond_filled`, `mean_annual_overflow_m3`,
+`mean_end_monsoon_storage_m3`, `mean_annual_inflow_m3`, `runoff_supports_fill`,
+and a full `seasonal` breakdown matching the `/api/simulatePond` format.
+
+Response also includes `assumptions` (grid dimensions, loss values, formula note),
+`rainfall` provenance, and `runoff_area_m2` (catchment minus pond footprint).
+
+The evaluation uses a fixed grid of 3 lengths × 3 widths × 2 depths (18 cells).
+Side slope (2:1), freeboard (0.5 m) and margin (5 m) are fixed grid constants.
+Terrain suitability is not re-ranked; the sizing pipeline is deliberately independent
+of the catchment-based score to avoid counting catchment area twice.
+
+Invalid inputs return `400`; unavailable rainfall returns `503`.
 
 ### `POST /api/analyzeContour`
 
@@ -470,8 +534,9 @@ python -m pytest tests/ -v
 | `test_places.py` | 11 | Submitted location search, caching, rate limiting and provider failures |
 | `test_rainfall.py` | 11 | Complete calendar coverage, units, invalid days, cache and provider failures |
 | `test_water_volume.py` | 17 | Annual runoff formula, coefficient limits, provisional status and unavailable rainfall |
-| `test_storage.py` | 17 | Daily water conservation, leap years, carry-over, loss limits, direct rain, validation and outages |
+| `test_storage.py` | 44 | Daily water conservation, leap years, carry-over, losses, direct rain, seasonal aggregation, fill rate, end-monsoon storage, custom seasons and API integration |
 | `test_pond_design.py` | 17 | Sloped capacity, freeboard, rotation, full-footprint containment, water intersections and API validation |
+| `test_sizing.py` | 50 | Capacity formula, candidate grid, validation, alternatives mode, target mode, infeasible targets, HTTP route |
 
 ---
 
@@ -526,4 +591,5 @@ and generated plots are kept locally and excluded from Git.
 - [x] Historical rainfall and annual runoff estimates with map labels
 - [x] Interactive pond footprint, proposed depth, capacity and land/water fit checks
 - [x] Historical seasonal storage with adjustable losses and water use
-- [ ] Automatic size recommendations, soil suitability and field validation
+- [x] Pond-size recommendation: candidate grid, water-balance evaluation, target and alternatives modes (`services/sizing.py`)
+- [ ] Soil suitability and field validation

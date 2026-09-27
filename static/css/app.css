@@ -618,3 +618,40 @@ input::file-selector-button {
 #storage-chart { display: block; width: 100%; margin: 12px 0; }
 #storage-chart text { font: 12px sans-serif; fill: #53665d; }
 #storage-snapshot, #storage-summary { font-size: 13px; line-height: 1.5; }
+
+/* ── Site summary panel ─────────────────────────────────────────────────── */
+#design-summary { margin: 18px 0 0; padding: 14px 16px; background: #f0f5e7; border-radius: 10px; border: 1px solid #c8d9b8; }
+.summary-heading { font-size: 13px; font-weight: 700; margin: 0 0 12px; color: #203d36; }
+.summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 16px; margin: 0; font-size: 12px; }
+.summary-label { color: #68766d; font-weight: 600; margin: 0; padding: 5px 0 1px; }
+.summary-value { margin: 0; padding: 1px 0 5px; font-weight: 600; color: #203d36; border-bottom: 1px solid #dde8d4; }
+.summary-sub { display: block; font-weight: 400; font-size: 11px; color: #68766d; }
+
+/* ── Size alternatives section ──────────────────────────────────────────── */
+#sizing-panel { margin-top: 20px; border-top: 1px solid #ccd7d0; padding-top: 14px; }
+.sizing-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.sizing-header h3 { font-size: 13px; font-weight: 700; margin: 0; }
+#target-volume { flex: 1; min-width: 0; padding: 9px 12px; border: 1px solid #ccd7d0; border-radius: 8px; font: inherit; font-size: 12px; }
+#sizing-result { margin-top: 10px; }
+#sizing-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; border: 1px solid #e0e5da; margin: 10px 0; }
+.sizing-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.sizing-table th { background: #f0f5e7; color: #53665d; font-weight: 600; padding: 8px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid #dde8d4; }
+.sizing-table td { padding: 8px 10px; border-bottom: 1px solid #e8ede2; white-space: nowrap; }
+.sizing-table tr:last-child td { border-bottom: 0; }
+.sizing-recommended td { background: #e8f5e0; font-weight: 600; }
+.sizing-label { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.sizing-label--small { background: #e6eadf; color: #53665d; }
+.sizing-label--intermediate { background: #d2ebd4; color: #1e5e38; }
+.sizing-label--large { background: #ccd8f5; color: #2a3f8a; }
+.sizing-label--recommended { background: #167c86; color: #fff; }
+.sizing-label--next_step_up, .sizing-label--next\ step\ up { background: #e4eef7; color: #2d5a8a; }
+.sizing-label--largest_available, .sizing-label--largest\ available { background: #f5e9cc; color: #7a4e14; }
+
+/* ── Fill-rate mini bar chart ────────────────────────────────────────────── */
+#fillrate-section { margin: 12px 0; }
+.summary-subhead { font-size: 11px; font-weight: 600; color: #68766d; margin: 0 0 4px; }
+#fillrate-chart { display: block; width: 100%; }
+
+/* ── Download button ────────────────────────────────────────────────────── */
+.dl-button { display: block; margin-top: 12px; color: #167c86; font-weight: 600; font-size: 12px; }
+.dl-button:hover { text-decoration: underline; }
