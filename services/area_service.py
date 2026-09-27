@@ -12,20 +12,30 @@ from services.waterways import screen_waterways, WaterwayDataError
 
 
 def analyze_selected_land(land, *, edge_setback_m=100., water_buffer_m=30.,
-                          max_slope_deg=8., buffers=(2000., 4000.)):
+                          max_slope_deg=8., buffers=(2000., 4000.),
+                          progress_token=None):
     """Try a wider terrain extent once if a returned catchment touches its edge.
 
     Each extent is ranked and water-screened independently. If expansion fails,
     retain the earlier screened result with its original truncation flags.
+
+    progress_token, when provided, is updated with human-readable stage names
+    at each pipeline step so a polling endpoint can surface progress to clients.
     """
+    from services.progress import report
     previous = None
     for buffer_m in buffers:
         try:
+            report(progress_token, 'Retrieving elevation\u2026')
             dem, epsg, source = fetch_elevation(land, buffer_m=buffer_m)
+            report(progress_token, 'Checking terrain\u2026')
             candidate_mask, land_metadata = land_candidate_mask(land, dem, epsg)
             slope = calculate_slope(dem)
+            report(progress_token, 'Tracing drainage\u2026')
             hydro = run_hydrology(dem)
+            report(progress_token, 'Checking mapped water\u2026')
             water, water_metadata = screen_waterways(dem, epsg, buffer_m=water_buffer_m)
+            report(progress_token, 'Ranking pond sites\u2026')
             ranked = rank_pond_candidates(dem, slope, epsg, hydrology=hydro,
                                          candidate_mask=candidate_mask, exclusion_mask=water,
                                          edge_setback_m=edge_setback_m, max_slope_deg=max_slope_deg)
@@ -35,11 +45,14 @@ def analyze_selected_land(land, *, edge_setback_m=100., water_buffer_m=30.,
             if previous:
                 previous['planning']['expansion_status'] = 'unavailable'
                 previous['planning']['coverage_note'] = 'A larger terrain extent could not be analyzed. These results use the earlier screened extent; edge-reaching catchments remain provisional.'
+                report(progress_token, 'done')
                 return previous, 200
             if isinstance(exc, WaterwayDataError):
+                report(progress_token, 'error')
                 return {'status': 'error', 'error_code': 'waterway_screening_unavailable',
                         'waterway_screening': {'status': 'unavailable'},
                         'error': 'Could not check for existing rivers and water bodies. Check the server connection and retry. No unscreened sites were selected.'}, 503
+            report(progress_token, 'error')
             return {'status': 'error', 'error': str(exc)}, 503 if isinstance(exc, ElevationDataError) else 422
 
         sites = [{k: v for k, v in s.items() if k not in {'grid_row', 'grid_col'}}
@@ -67,4 +80,5 @@ def analyze_selected_land(land, *, edge_setback_m=100., water_buffer_m=30.,
         }
         if not truncated:
             break
+    report(progress_token, 'done')
     return previous, 200

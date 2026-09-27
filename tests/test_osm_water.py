@@ -76,15 +76,16 @@ def test_dense_map_splits_but_deduplicates_objects(monkeypatch):
     assert len(result['elements']) == 1
 
 
-def test_rate_limit_not_retried_or_treated_as_empty(monkeypatch):
+def test_rate_limit_is_retried_briefly_then_fails(monkeypatch):
     calls = []
     def fetch(req, **kwargs):
         calls.append(1)
         raise HTTPError(req.full_url,429,'Too Many Requests',{},io.BytesIO(b'Rate limit'))
     monkeypatch.setattr(osm_water, 'urlopen', fetch)
+    monkeypatch.setattr(osm_water.time, 'sleep', lambda *args: None)
     with pytest.raises(WaterwayDataError):
         osm_water.fetch_osm_water((21,81,21.3,81.3))
-    assert len(calls) == 1
+    assert len(calls) == 3
 
 
 def test_expired_cache_not_used_as_success(monkeypatch):

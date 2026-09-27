@@ -87,10 +87,25 @@ def fetch_osm_water(bounds, timeout=30):
         requests += 1
         req = Request(API+path, headers={'User-Agent': 'VillagePondPlanner/1.0 (student terrain-planning project)',
                                         'Accept': 'application/xml', 'Accept-Encoding': 'gzip'})
-        with _DOWNLOADS:
-            with urlopen(req, timeout=min(timeout, remaining)) as response:
-                stream = gzip.GzipFile(fileobj=response) if response.headers.get('Content-Encoding') == 'gzip' else response
-                raw = stream.read(32*1024*1024 + 1)
+        
+        for attempt in range(3):
+            try:
+                with _DOWNLOADS:
+                    with urlopen(req, timeout=min(timeout, remaining)) as response:
+                        stream = gzip.GzipFile(fileobj=response) if response.headers.get('Content-Encoding') == 'gzip' else response
+                        raw = stream.read(32*1024*1024 + 1)
+                break
+            except HTTPError as exc:
+                if exc.code in {429, 500, 502, 503, 504} and attempt < 2:
+                    time.sleep(1 + attempt)
+                    continue
+                raise
+            except TimeoutError:
+                if attempt < 2:
+                    time.sleep(1 + attempt)
+                    continue
+                raise
+
         if len(raw) > 32*1024*1024:
             raise WaterwayDataError('OSM response is too large. Select a smaller area.')
         root = ET.fromstring(raw)

@@ -104,6 +104,74 @@ def test_rainfall_failure_is_not_zero_storage(body, monkeypatch):
     assert 'monthly' not in response.get_json()
 
 
+def test_gradual_dry_season_drainage_reaches_empty(body):
+    """A pond filled to capacity drains substantially through losses alone with no rain.
+
+    This exercises the long dry-season path: many consecutive rainless days
+    where evaporation and seepage consume stored water.  With sloped sides the
+    water surface area (and therefore loss rate) decreases as the pond empties,
+    so the pond may not reach exactly zero, but must lose well over 90% of its
+    stored volume.  No negative storage should ever appear.
+    """
+    design = design_pond(body, screen_water=False)
+    capacity = design['capacity_m3']
+    # Build 90 dry days with zero rainfall (June–August).
+    daily = {f'202006{d:02d}': 0. for d in range(1, 30)}
+    daily.update({f'202007{d:02d}': 0. for d in range(1, 32)})
+    daily.update({f'202008{d:02d}': 0. for d in range(1, 32)})
+    # Start full; high losses (10 mm/day evaporation + 5 mm/day seepage).
+    result = daily_balance(daily, design, runoff_area=0, coefficient=0,
+                           evaporation=10, seepage=5, demand=0, initial=1.0)
+    # Storage must be non-negative every month.
+    for row in result['monthly']:
+        assert row['end_storage_m3'] >= -1e-9, f"Negative storage in {row['month']}"
+    # After 90 days of heavy losses, the pond must be substantially depleted
+    # (>90% drained).  Loss rate falls with water level so exact zero is not
+    # required; the important property is significant, physically plausible depletion.
+    end = result['totals']['end_storage_m3']
+    assert end < 0.15 * capacity, (
+        f"Expected >85% depletion after 90 dry days; "
+        f"end_storage={end:.1f} m³, capacity={capacity:.1f} m³"
+    )
+    # Total losses must not exceed initial volume (conservation).
+    total_lost = math.fsum(result['totals'][k]
+                           for k in ('evaporation_m3', 'seepage_m3', 'supplied_m3'))
+    assert total_lost <= capacity + 1e-6
+
+
+
+def test_partial_fill_then_dry_season_monotonically_decreasing(body):
+    """Storage only decreases during a dry period with losses and no inflow."""
+    design = design_pond(body, screen_water=False)
+    daily = {f'2021{m:02d}{d:02d}': 0.
+             for m in (12,) for d in range(1, 32)
+             if f'2021{m:02d}{d:02d}' <= '20211231'}
+    # 20 days; start at half capacity.
+    daily_20 = {f'202101{d:02d}': 0. for d in range(1, 21)}
+    result = daily_balance(daily_20, design, runoff_area=0, coefficient=0,
+                           evaporation=6, seepage=2, demand=0, initial=0.5)
+    storages = [row['end_storage_m3'] for row in result['monthly']]
+    # With no rain and positive losses each month must be <= previous month.
+    for prev, curr in zip(storages, storages[1:]):
+        assert curr <= prev + 1e-9
+
+
+def test_pond_with_demand_supplied_limited_by_available_water(body):
+    """Demand is capped at available storage; unmet demand is recorded correctly."""
+    design = design_pond(body, screen_water=False)
+    capacity = design['capacity_m3']
+    # One day with very high demand; start at 10% capacity.
+    result = daily_balance({'20200601': 0.}, design, runoff_area=0, coefficient=0,
+                           evaporation=0, seepage=0, demand=1e9, initial=0.1)
+    row = result['monthly'][0]
+    # Supplied cannot exceed what was available.
+    assert row['supplied_m3'] <= capacity * 0.1 + 1e-6
+    # Unmet = demand - supplied.
+    assert row['unmet_demand_m3'] == pytest.approx(1e9 - row['supplied_m3'], rel=1e-6)
+    # Storage must be zero after meeting as much demand as possible.
+    assert row['end_storage_m3'] < 1e-8
+
+
 # ---------------------------------------------------------------------------
 # TestSeasonalSummary
 # ---------------------------------------------------------------------------

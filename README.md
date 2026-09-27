@@ -332,6 +332,23 @@ Invalid/missing geometry returns `400`; an unsupported selection or no suitable
 site returns `422`; unavailable public elevation or water screening returns
 `503`. There is no automatic switch to unscreened results or contour terrain.
 
+Every successful `200` response also includes a `progress_token` string and an
+`X-Progress-Token` response header. The pipeline is synchronous so the token is
+always in its terminal `done` state by the time the response is received, but it
+can be used to poll intermediate stages if the client issues the request in a
+background thread and polls separately:
+
+```
+GET /api/analysis/status/<token>
+```
+
+Returns `{"stage": "Tracing drainage\u2026", "done": false}` during analysis and
+`{"stage": "done", "done": true}` on completion. `stage: "error"` and
+`stage: "unknown"` (expired or invalid token) are also terminal (`done: true`).
+Tokens expire after 10 minutes. Stage names: `queued`, `Retrieving elevation…`,
+`Checking terrain…`, `Tracing drainage…`, `Checking mapped water…`,
+`Ranking pond sites…`, `done`, `error`.
+
 ### `POST /api/designPond`
 
 Accepts JSON with `site: {latitude, longitude}` and a required `land_area` GeoJSON
@@ -514,7 +531,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-351 tests across 18 test modules.
+444 tests across 20 test modules.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -534,9 +551,10 @@ python -m pytest tests/ -v
 | `test_places.py` | 11 | Submitted location search, caching, rate limiting and provider failures |
 | `test_rainfall.py` | 11 | Complete calendar coverage, units, invalid days, cache and provider failures |
 | `test_water_volume.py` | 17 | Annual runoff formula, coefficient limits, provisional status and unavailable rainfall |
-| `test_storage.py` | 44 | Daily water conservation, leap years, carry-over, losses, direct rain, seasonal aggregation, fill rate, end-monsoon storage, custom seasons and API integration |
+| `test_storage.py` | 47 | Daily water conservation, leap years, carry-over, losses, dry-season drainage to empty, demand capping, direct rain, seasonal aggregation, fill rate, end-monsoon storage, custom seasons and API integration |
 | `test_pond_design.py` | 17 | Sloped capacity, freeboard, rotation, full-footprint containment, water intersections and API validation |
 | `test_sizing.py` | 50 | Capacity formula, candidate grid, validation, alternatives mode, target mode, infeasible targets, HTTP route |
+| `test_progress.py` | 13 | Token lifecycle, stage updates, expiry, eviction, HTTP polling endpoint, analyzeArea token embedding |
 
 ---
 
