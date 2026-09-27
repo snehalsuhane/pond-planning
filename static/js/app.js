@@ -23,7 +23,8 @@
   const contours = L.featureGroup().addTo(map);
   const catchments = L.featureGroup().addTo(map);
   const markers = L.featureGroup().addTo(map);
-  L.control.layers(null, {'Contour preview': contours, 'Land boundary': land}, {position: 'topright'}).addTo(map);
+  const terrainExtent = L.featureGroup();
+  L.control.layers(null, {'Contour preview': contours, 'Land boundary': land, 'Analyzed terrain': terrainExtent}, {position: 'topright'}).addTo(map);
   map.addControl(new L.Control.Draw({
     draw: {polygon: {allowIntersection: false, showArea: true, shapeOptions: {color: '#ad7e26', dashArray: '6 5'}},
       rectangle: {shapeOptions: {color: '#ad7e26', dashArray: '6 5'}},
@@ -54,10 +55,13 @@
 
   let candidates = [], selected = 0, request = null, revision = 0, editing = false;
   const fileInput = $('contour-file');
+  const sourceInput = $('terrain-source');
+  const isPublic = () => sourceInput.value === 'public';
   function clearResults() {
     candidates = [];
     markers.clearLayers();
     catchments.clearLayers();
+    terrainExtent.clearLayers();
     $('candidate-list').replaceChildren();
     $('results').hidden = true;
     $('compare').checked = false;
@@ -70,16 +74,40 @@
     if (file.size > 50 * 1024 * 1024) return 'The file exceeds the 50 MB upload limit.';
     return null;
   }
+  function inputError() {
+    if (!isPublic()) return fileError(fileInput.files[0]);
+    const boundary = land.getLayers()[0];
+    if (!boundary) return 'Draw a land boundary to use public elevation.';
+    if (L.GeometryUtil.geodesicArea(boundary.getLatLngs()[0]) > 25000000) return 'Select a smaller area (up to 2,500 hectares).';
+    return null;
+  }
+  function displaySource() {
+    $('upload-panel').hidden = isPublic();
+    $('public-help').hidden = !isPublic();
+    $('land-requirement').textContent = isPublic() ? 'required' : 'optional';
+    $('mode-label').textContent = isPublic() ? 'Public terrain analysis' : 'Contour survey analysis';
+    $('land-help').textContent = isPublic()
+      ? 'Select up to 2,500 ha. Pond sites stay inside your land; catchments can extend outside it. Surrounding terrain is included automatically.'
+      : 'Pond sites must lie inside your land. Catchments can extend beyond it. Without a boundary, the whole survey is searched.';
+    if (isPublic()) map.removeLayer(contours); else contours.addTo(map);
+  }
+  sourceInput.addEventListener('change', () => { displaySource(); invalidateSelection(); });
+  $('locate-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const lat = Number($('latitude').value), lon = Number($('longitude').value);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -80 || lat > 84 || Math.abs(lon) > 180) return;
+    map.stop().setView([lat, lon], 15, {animate: false});
+  });
   function invalidateSelection() {
     ++revision;
     request?.abort();
     request = null;
     clearResults();
-    $('analyze').disabled = editing || !!fileError(fileInput.files[0]);
+    $('analyze').disabled = editing || !!inputError();
     $('analyze').textContent = 'Find pond locations ↗';
-    $('map-caption').textContent = land.getLayers().length ? 'Pond sites will be restricted to your land' : 'Analysis will search the full contour survey';
+    $('map-caption').textContent = land.getLayers().length ? 'Pond sites will be restricted to your land' : isPublic() ? 'Zoom in and draw the land you want to analyze' : 'Analysis will search the full contour survey';
     status(editing ? 'Finish or cancel the boundary edit before analyzing.'
-      : fileError(fileInput.files[0]) || 'Boundary updated. Run the analysis to refresh pond options.');
+      : inputError() || 'Ready. Run the analysis to refresh pond options.');
   }
   async function preview(file, version) {
     // KMZ parsing stays on the backend; its map extent is available after analysis.
@@ -102,6 +130,8 @@
     }
   }
   fileInput.addEventListener('change', async () => {
+    sourceInput.value = 'contours';
+    displaySource();
     const version = ++revision;
     request?.abort();
     request = null;
@@ -168,11 +198,18 @@
     candidates = (data.pond_candidates || []).slice(0, 5);
     $('results').hidden = false;
     $('result-count').textContent = String(candidates.length);
-    $('result-meta').textContent = `${data.filename} · ${number(data.dem?.resolution_m)} m terrain grid · ${data.waterway_screening?.status === 'screened_against_mapped_water' ? 'Mapped-water screening complete' : 'Water screening not confirmed'}`;
+    const publicTerrain = data.planning?.terrain_scope === 'buffered_public_dem';
+    $('result-meta').textContent = `${data.terrain_source?.name || data.filename} · ${number(data.dem?.resolution_m)} m terrain grid · ${data.waterway_screening?.status === 'screened_against_mapped_water' ? 'Mapped-water screening complete' : 'Water screening not confirmed'}`;
+    $('source-credit').hidden = !publicTerrain;
+    if (data.terrain?.geometry) L.geoJSON(data.terrain.geometry, {style: {color: '#68766d', weight: 1.5, dashArray: '5 5', fillOpacity: 0}, interactive: false}).addTo(terrainExtent);
     if (data.land_selection) $('result-meta').textContent += ` · Sites within ${number(data.land_selection.area_ha)} ha of selected land`;
     const coverage = [];
     if (data.land_selection?.partial_terrain_coverage) coverage.push(`The survey covers ${number(data.land_selection.terrain_coverage_fraction * 100, 1)}% of your selected land. Only covered terrain was searched.`);
-    if (candidates.some(site => site.catchment.boundary_truncated)) coverage.push('Some catchments reach the survey edge. Their areas are provisional because upstream terrain may be missing. A larger survey is needed to resolve this.');
+    if (publicTerrain) coverage.push(`Public surface elevation at 30 m resolution; ${number(data.planning.terrain_buffer_m / 1000)} km of surrounding terrain included.`);
+    if (candidates.some(site => site.catchment.boundary_truncated)) coverage.push(publicTerrain
+      ? 'Some catchments still reach the analyzed terrain edge. Their areas remain provisional because upstream terrain may be missing.'
+      : 'Some catchments reach the survey edge. Their areas are provisional because upstream terrain may be missing. A larger survey is needed to resolve this.');
+    if (data.planning?.coverage_note) coverage.push(data.planning.coverage_note);
     $('coverage-note').textContent = coverage.join(' ');
     $('coverage-note').hidden = !coverage.length;
     $('fit-results').disabled = !candidates.length;
@@ -189,7 +226,7 @@
       card.append(heading, area,
         element('span', 'candidate-info', `${number(candidate.local_slope_deg)}° local slope · ${number(candidate.elevation_m, 1)} m elevation`),
         element('span', 'candidate-info', `${candidate.latitude.toFixed(5)}, ${candidate.longitude.toFixed(5)}`));
-      if (candidate.catchment.boundary_truncated) card.append(element('span', 'flag', 'Provisional area · catchment reaches survey edge'));
+      if (candidate.catchment.boundary_truncated) card.append(element('span', 'flag', 'Provisional area · catchment reaches terrain edge'));
       if (candidate.assessment?.routing_sensitivity_fraction > .5) card.append(element('span', 'flag', 'Area depends strongly on modeled overflow'));
       card.addEventListener('click', () => selectCandidate(i));
       $('candidate-list').append(card);
@@ -199,28 +236,35 @@
         .on('click', () => selectCandidate(i, true, true)).addTo(markers);
     });
     if (candidates.length) selectCandidate(0);
-    else $('candidate-list').append(element('p', 'notice', 'No suitable pond locations were found in this survey. Try another contour map.'));
+    else $('candidate-list').append(element('p', 'notice', 'No suitable pond locations were found. Try a different boundary or contour map.'));
   }
   $('compare').addEventListener('change', () => selectCandidate(selected, false));
   $('fit-results').addEventListener('click', viewAll);
   $('analyze').addEventListener('click', async () => {
-    const file = fileInput.files[0], error = fileError(file);
+    const file = fileInput.files[0], error = inputError();
     if (error || editing) { status(error || 'Finish the boundary edit first.', 'error'); return; }
     const version = ++revision;
     request?.abort();
     const controller = new AbortController();
     request = controller;
-    const timeout = setTimeout(() => controller.abort(), 180000);
+    const timeout = setTimeout(() => controller.abort(), isPublic() ? 300000 : 180000);
     clearResults();
     $('analyze').disabled = true;
-    $('analyze').textContent = 'Analyzing survey…';
-    status('Analyzing terrain, checking mapped water, and tracing catchments. This can take a minute.', 'loading');
+    $('analyze').textContent = 'Analyzing terrain…';
+    status(isPublic() ? 'Retrieving elevation, checking mapped water, and tracing catchments. This can take a few minutes.'
+      : 'Analyzing terrain, checking mapped water, and tracing catchments. This can take a minute.', 'loading');
     try {
-      const form = new FormData();
-      form.append('contour_map', file);
       const boundary = land.getLayers()[0];
-      if (boundary) form.append('land_area', JSON.stringify(boundary.toGeoJSON().geometry));
-      const response = await fetch('/api/analyzeContour', {method: 'POST', body: form, signal: controller.signal});
+      let response;
+      if (isPublic()) {
+        response = await fetch('/api/analyzeArea', {method: 'POST', signal: controller.signal,
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify({land_area: boundary.toGeoJSON().geometry})});
+      } else {
+        const form = new FormData();
+        form.append('contour_map', file);
+        if (boundary) form.append('land_area', JSON.stringify(boundary.toGeoJSON().geometry));
+        response = await fetch('/api/analyzeContour', {method: 'POST', body: form, signal: controller.signal});
+      }
       const data = await response.json().catch(() => null);
       if (version !== revision) return;
       if (!response.ok || data?.status !== 'success') {
@@ -237,7 +281,7 @@
       clearTimeout(timeout);
       if (version === revision) {
         request = null;
-        $('analyze').disabled = editing || !!fileError(fileInput.files[0]);
+        $('analyze').disabled = editing || !!inputError();
         $('analyze').textContent = 'Find pond locations ↗';
       }
     }

@@ -10,6 +10,45 @@
   background:var(--paper);
 }
 
+.field-label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 7px;
+}
+
+#terrain-source {
+  width: 100%;
+  padding: 11px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.coordinate-form {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.coordinate-form label {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.coordinate-form input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 7px;
+  margin-top: 4px;
+}
+
 * {
   box-sizing:border-box;
 }

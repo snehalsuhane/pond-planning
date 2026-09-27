@@ -9,8 +9,26 @@ from flask import Blueprint, request, current_app, jsonify
 
 from services.contour_service import handle_contour_upload
 from utils.land_selection import parse_land_area, LandSelectionError
+from services.area_service import analyze_selected_land
 
 contour_bp = Blueprint("contour", __name__)
+
+
+@contour_bp.post('/analyzeArea')
+def analyze_area():
+    """Analyze a required GeoJSON land_area using public elevation, without a file."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or 'land_area' not in data:
+        return jsonify({'status': 'error', 'error': 'Send a JSON object containing land_area (a GeoJSON Polygon).'}), 400
+    try:
+        land = parse_land_area(data['land_area'])
+    except LandSelectionError as exc:
+        return jsonify({'status': 'error', 'error': str(exc)}), 400
+    result, code = analyze_selected_land(
+        land, edge_setback_m=current_app.config['POND_EDGE_SETBACK_M'],
+        water_buffer_m=current_app.config['WATERWAY_BUFFER_M'],
+        max_slope_deg=current_app.config['POND_MAX_SLOPE_DEG'])
+    return jsonify(result), code
 
 
 @contour_bp.route("/analyzeContour", methods=["POST"])

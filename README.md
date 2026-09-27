@@ -4,6 +4,8 @@ A Flask-based REST API for analysing contour survey files (KML/KMZ) to assist
 in identifying pond locations and estimating their catchment areas.
 A browser interface provides contour uploads, land-boundary drawing, and
 interactive exploration of the suggested pond locations and catchments.
+Land can also be analyzed directly on the map using public elevation data,
+without uploading a contour file.
 
 ---
 
@@ -21,6 +23,8 @@ pond-planning/
 │   └── contour.py
 ├── services/
 │   ├── contour_service.py
+│   ├── area_service.py          # Selected-land analysis using public terrain
+│   ├── elevation.py             # Copernicus raster retrieval and caching
 │   └── waterways.py             # Existing-water screening and caching
 ├── analysis/
 │   ├── terrain.py              # Contour validation, metadata, slope
@@ -69,7 +73,9 @@ python app.py
 
 The API will be available at `http://localhost:5000`. Water screening requires
 internet access or a matching response cached within the last hour.
-Open the same address in a browser to upload a contour map and explore results.
+Open the same address in a browser. Choose public elevation and draw your land,
+or switch to a contour survey to upload a KML/KMZ file. You can pan/zoom the map
+or use **Go to coordinates** to locate the land.
 The map libraries and OpenStreetMap base map also require internet access.
 
 ---
@@ -77,6 +83,7 @@ The map libraries and OpenStreetMap base map also require internet access.
 ## Implemented Features
 
 ### Map Interface
+- Analyze drawn land using public elevation without a file, or switch to contour upload
 - Upload a KML/KMZ survey and analyze it through the existing API
 - Preview KML contour lines before analysis; KMZ results locate the map after analysis
 - Draw, edit, or delete one land boundary, with its approximate area shown in hectares
@@ -87,7 +94,19 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Display one catchment at a time, preserving polygon holes and multipart geometry; optionally compare all outlines
 - Show catchment hectares, local slope, coordinates, and survey-boundary/overflow qualifications
 - Provide upload validation, loading feedback, and retryable error messages on desktop and mobile
-- Public-elevation analysis and rainfall-based water volume are planned for the later integration stages
+- Show the terrain source, resolution, surrounding extent, and coverage qualifications; the analyzed terrain outline is available in the map layer control
+- Rainfall-based water volume is planned for the next integration stage
+
+### Public Elevation — `services/elevation.py`
+- Retrieves [Copernicus GLO-30](https://copernicus-dem-30m.s3.amazonaws.com/readme.html) elevation windows from public Cloud Optimized GeoTIFFs; no API key is needed
+- Projects elevation into a local UTM grid at 30 m spacing, preserving the row orientation expected by the existing slope and drainage code
+- Starts with 2 km of surrounding terrain; expands once to 4 km if a returned catchment touches the analysis edge
+- Uses the same pond ranking, land containment, catchment tracing, and mapped-water screening as the contour workflow
+- Still marks edge-reaching catchments as provisional at the expansion limit. If expansion fails, retains only the earlier screened result and reports the incomplete expansion
+- Limits one selection to 2,500 hectares and a maximum dimension of 15 km; the raster also has a one-million-cell processing limit
+- Supports local areas between 80°S and 84°N; date-line crossings are not supported
+- Caches complete projected windows in `.cache/terrain/` (`TERRAIN_CACHE_DIR` can override the directory). Missing/incomplete terrain fails explicitly instead of being filled with invented elevation
+- Public surface elevation is coarser than survey contours and can include buildings or vegetation. Use it for preliminary comparison, with source attribution shown alongside results
 
 ### File Upload & Validation
 - Accepts `multipart/form-data` POST requests with `.kml` or `.kmz` files
@@ -209,6 +228,30 @@ API response: terrain + DEM + pond_candidates + hydrology + waterway_screening +
 ---
 
 ## API Reference
+
+### `POST /api/analyzeArea`
+
+Accepts JSON containing a required `land_area` GeoJSON Polygon (or Polygon
+Feature), with coordinates in `[longitude, latitude]` order. No upload is needed.
+Example request using a local JSON file containing that object:
+
+```bash
+curl -X POST http://localhost:5000/api/analyzeArea \
+     -H "Content-Type: application/json" \
+     --data-binary @selection.json
+```
+
+Returns `pond_candidates`, `land_selection`, `waterway_screening`, `terrain`,
+`dem`, and `planning`, plus `terrain_source` with the provider and source links.
+`planning.terrain_buffer_m` describes the final extent and
+`planning.expansion_status` reports `not_needed`, `expanded`, `limit_reached`,
+or `unavailable`. Pond coordinates and catchment geometries use WGS84; catchment
+areas are displayed in hectares. The selected land restricts sites, not their
+upstream drainage.
+
+Invalid/missing geometry returns `400`; an unsupported selection or no suitable
+site returns `422`; unavailable public elevation or water screening returns
+`503`. There is no automatic switch to unscreened results or contour terrain.
 
 ### `POST /api/analyzeContour`
 
