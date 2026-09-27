@@ -98,7 +98,7 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Provide upload validation, loading feedback, and retryable error messages on desktop and mobile
 - Show the terrain source, resolution, surrounding extent, and coverage qualifications; the analyzed terrain outline is available in the map layer control
 - Show estimated annual collectible runoff (m³/year) on each result card and map label, with an adjustable runoff fraction
-- Explain annual runoff, pond capacity, and stored water separately; capacity and stored water are marked as not yet calculated
+- Explain annual runoff, pond capacity, and stored water separately; capacity is calculated in the pond-design panel, while stored water remains uncalculated
 
 ### Rainfall & Water Volume — `services/rainfall.py`, `services/water_volume.py`
 - Retrieves daily corrected precipitation from [NASA POWER](https://power.larc.nasa.gov/docs/services/api/temporal/daily/) for the last ten complete calendar years, then averages the annual totals
@@ -106,9 +106,20 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Requires all daily values, including leap days. Missing data is never replaced with zero
 - Estimates annual collectible runoff as `rainfall_mm / 1000 × catchment_area_m2 × runoff_coefficient`
 - The default runoff coefficient is **0.30** (30% of rainfall becomes runoff), an illustrative project assumption. Users can choose a value from 0 to 1 before analysis; changing it clears previous results until analysis is rerun
-- Assumes uniform rainfall and that all modeled runoff reaches the collection target. Does not estimate pond depth, storage capacity, evaporation, seepage, or conveyance losses; this is potential annual inflow, not guaranteed yield
+- Assumes uniform rainfall and that all modeled runoff reaches the collection target. The runoff calculation does not estimate pond depth, storage capacity, evaporation, seepage, or conveyance losses; this is potential annual inflow, not guaranteed yield
 - Retains the existing ranking. The API retains provisional status when catchments reach the terrain edge or depend strongly on modeled depression overflow; cards and map labels explain the specific reasons. Overlapping alternatives must not be added together
 - Caches complete rainfall responses for 30 days in `.cache/rainfall/` (`RAINFALL_CACHE_DIR` can override the directory). If rainfall retrieval fails, pond/catchment results remain available with volume marked unavailable
+
+### Pond Design — `services/pond_design.py`
+- Select a candidate and choose **Design this pond**. A selected land boundary is required; upload-only users can draw one and rerun analysis
+- Adjust top-rim length and width, excavation depth, and clockwise orientation from grid north. Advanced assumptions include side slope (horizontal:vertical), freeboard, and a margin around the excavation
+- Defaults are a 40 × 30 m rim, 2 m excavation depth, 2:1 side slopes, 0.5 m freeboard, and 5 m margin. These are illustrative project inputs, not an automatically recommended design
+- Assumes level ground and a flat bottom. Bottom dimensions subtract twice the side-slope ratio times excavation depth; water-surface dimensions subtract twice the ratio times freeboard
+- Calculates capacity below freeboard using `V = water_depth / 6 × (bottom_area + 4 × mid_water_depth_area + water_surface_area)`. This integrates the changing rectangular cross-section; it does not use rim area times depth
+- Checks the entire rotated footprint and margin against selected land, including holes, and against mapped-water buffers. These checks do not establish ground stability, inlet/outlet suitability, or actual water availability
+- Shows the rim, water surface, margin, capacity and water depth on the map. Designs that do not fit are red; unavailable water screening is amber and never reported as passing
+- Design edits clear stale capacity and overlays; changing candidate, land, or terrain source clears the previous design. Recalculating uses a separate endpoint without rerunning terrain, catchments or rainfall
+- Input limits (including 3 m maximum excavation depth) are project assumptions. Actual stored water, seasonal filling and automatic size recommendations are later steps
 
 ### Public Elevation — `services/elevation.py`
 - Retrieves [Copernicus GLO-30](https://copernicus-dem-30m.s3.amazonaws.com/readme.html) elevation windows from public Cloud Optimized GeoTIFFs; no API key is needed
@@ -178,15 +189,18 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Cells steeper than `max_slope_deg` (default 8°), within the survey-edge setback (default 100m), or on mapped water are excluded
 - Implements a greedy selection algorithm ensuring all returned candidates are at least `min_distance_m` (default 100m) apart
 - Near-duplicate catchments (intersection-over-union ≥ 80%) are skipped; remaining alternatives can overlap and should not be added as independent supplies
-- Ranking weights are screening assumptions. Pond shape, depth and capacity are planned next; rainfall–runoff estimates do not alter the ranking
+- Ranking weights are screening assumptions. Proposed pond dimensions, depth and capacity are assessed separately; rainfall–runoff estimates do not alter the ranking
 
 ### Existing-Water Screening — `services/waterways.py`
-- Retrieves mapped rivers, streams, canals and water bodies from OpenStreetMap through Overpass
+- Retrieves mapped rivers, streams, canals and water bodies through the main OpenStreetMap map API by default (`services/osm_water.py`). The selected coordinates determine the download area; no manual state downloads are needed
 - Applies a 30m default exclusion buffer, accounting for mapped channel width and cell size; a natural depression overlapping the buffer is rejected as a whole
-- Retries transient failures up to three times and caches complete responses for one hour in `.cache/waterways/`
-- If the default Overpass server is unreachable, remaining attempts use the [VK Maps public instance](https://wiki.openstreetmap.org/wiki/Overpass_API#Public_Overpass_API_instances); the total remains three attempts. An explicit `OVERPASS_ENDPOINT` override uses only that server
+- Main-API downloads filter water tags locally and fetch missing water-relation members. Successful results are cached for 24 hours in `.cache/waterways/osm-map/`; repeated selections and smaller pond footprints reuse covering data
+- Bounds-based downloads are limited to 16 requests and a 90-second lookup budget, with a 32 MB decompressed limit per response and at most two simultaneous downloads per server process. Dense-area node-limit responses trigger bounded subdivision; other failures remain explicit
+- Optional `WATERWAY_PROVIDER=overpass` retains one-hour caching and tries three distinct [public Overpass instances](https://wiki.openstreetmap.org/wiki/Overpass_API#Public_Overpass_API_instances): the main server, VK Maps, and Private.coffee. Prefers the most recent successful server within the running process and moves recently failed servers last for five minutes. An explicit `OVERPASS_ENDPOINT` override uses only that server
+- Reuses fresh cached water responses when their query bounds fully contain the requested area, including smaller pond footprints. Partial coverage and expired responses are not accepted
 - Returns `503` when screening is unavailable; expired or incomplete data is not used
-- `OVERPASS_ENDPOINT` and `WATERWAY_CACHE_DIR` are environment overrides; slope and setback settings are in `app.py`
+- `WATERWAY_PROVIDER` defaults to `osm`; `OVERPASS_ENDPOINT` applies only to the optional Overpass mode. `WATERWAY_CACHE_DIR` overrides cache storage; slope and setback settings are in `app.py`
+- The [main OSM map endpoint](https://wiki.openstreetmap.org/wiki/API_v0.6#Retrieving_map_data_by_bounding_box:_GET_/api/0.6/map) selects objects by vertices, so crossing or enclosing water with no vertices in the requested bounds may be absent. Results display this limitation. This bounded course-project integration is not a bulk-download service
 - Mapping may be incomplete. Water buffers exclude candidate locations but do not alter terrain routing. © OpenStreetMap contributors
 
 ### Flow Direction, Accumulation & Channels — `analysis/hydrology.py`
@@ -291,6 +305,23 @@ Invalid/missing geometry returns `400`; an unsupported selection or no suitable
 site returns `422`; unavailable public elevation or water screening returns
 `503`. There is no automatic switch to unscreened results or contour terrain.
 
+### `POST /api/designPond`
+
+Accepts JSON with `site: {latitude, longitude}` and a required `land_area` GeoJSON
+Polygon. Optional numeric inputs are `length_m` (5–500), `width_m` (5–500),
+`depth_m` (0.5–3), `orientation_deg` (0–360), `side_slope` (1–4),
+`freeboard_m` (0.1–1), and `margin_m` (1–30). Freeboard must be smaller than depth,
+and both bottom dimensions must remain positive.
+
+Returns `capacity_m3`, `water_depth_m`, dimensions, WGS84 `footprint`,
+`water_surface` and `clearance` geometries, `checks`, assumptions and messages.
+`screening_status` is `passes_checks`, `does_not_fit`, or `unverified`.
+A `200` response means the calculation completed, **not** that the design passed:
+inspect `screening_status`. During a water-provider outage the geometry and
+capacity remain available, with `avoids_mapped_water: null` and status `unverified`.
+If land containment fails, water screening is skipped. Invalid inputs return `400`.
+The endpoint screens the submitted design; it does not generate or rank a site.
+
 ### `POST /api/analyzeContour`
 
 Accepts a KML or KMZ contour survey file, parses it, validates the terrain
@@ -390,7 +421,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-303 tests across 15 test modules — all passing.
+334 tests across 17 test modules.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -402,13 +433,15 @@ python -m pytest tests/ -v
 | `test_pond.py` | 21 | Slope, collection targets, catchments, ranking and exclusions |
 | `test_hydrology.py` | 44 | D8 direction codes, filling, flat routing, accumulation, channels |
 | `test_catchment.py` | 9 | D8 upstream tracing, raster mask, area units, polygon WGS84 bounds |
-| `test_waterways.py` | 13 | Water buffers, geometry, incomplete results, retries and caching |
+| `test_waterways.py` | 16 | Water buffers, geometry, incomplete results, retries and caching |
+| `test_osm_water.py` | 11 | Main OSM downloads, relation completion, bounded subdivision, provider selection and coverage caching |
 | `test_area_route.py` | 16 | Map-only requests, coverage expansion, selected-land containment, runoff input |
 | `test_land_selection.py` | 18 | Polygon validation and whole-cell site containment |
 | `test_elevation.py` | 10 | Public elevation windows, projection, seams, limits and caching |
 | `test_places.py` | 11 | Submitted location search, caching, rate limiting and provider failures |
 | `test_rainfall.py` | 11 | Complete calendar coverage, units, invalid days, cache and provider failures |
 | `test_water_volume.py` | 17 | Annual runoff formula, coefficient limits, provisional status and unavailable rainfall |
+| `test_pond_design.py` | 17 | Sloped capacity, freeboard, rotation, full-footprint containment, water intersections and API validation |
 
 ---
 
@@ -461,4 +494,5 @@ and generated plots are kept locally and excluded from Git.
 
 - [x] Existing-water screening and separate catchment visualisations
 - [x] Historical rainfall and annual runoff estimates with map labels
-- [ ] Soil suitability, pond sizing and field validation
+- [x] Interactive pond footprint, proposed depth, capacity and land/water fit checks
+- [ ] Seasonal storage, automatic size recommendations, soil suitability and field validation

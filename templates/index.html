@@ -67,10 +67,38 @@
         <p id="rainfall-credit" class="hint" hidden>Rainfall: <a href="https://power.larc.nasa.gov/docs/services/api/temporal/daily/" target="_blank" rel="noopener">NASA POWER historical precipitation</a></p>
         <dl class="water-quantities" aria-label="Understanding water quantities">
           <dt>Annual runoff · m³/year</dt><dd>Water potentially arriving during a year. Estimated below for each option.</dd>
-          <dt>Pond capacity · m³</dt><dd>Water a designed pond can hold at once. Not calculated yet; requires pond dimensions and depth.</dd>
+          <dt>Pond capacity · m³</dt><dd>Water a designed pond can hold at once. Use “Design this pond” to calculate it from dimensions and depth.</dd>
           <dt>Stored water · m³</dt><dd>Water remaining at a particular time after inflow, losses, and use. Not calculated yet; requires a storage model.</dd>
         </dl>
         <div id="candidate-list"></div>
+        <button id="open-design" type="button" class="primary" disabled>Design this pond</button>
+        <p id="design-help" class="hint"></p>
+        <section id="pond-design" hidden aria-label="Pond design">
+          <h2 id="design-title">Design this pond</h2>
+          <p class="hint">A rectangular excavation centered on the selected site. Dimensions refer to the top rim; depth includes the dry freeboard above the water.</p>
+          <form id="design-form">
+            <div class="design-fields">
+              <label>Top length (m)<input name="length_m" type="number" min="5" max="500" step="any" value="40" required></label>
+              <label>Top width (m)<input name="width_m" type="number" min="5" max="500" step="any" value="30" required></label>
+              <label>Excavation depth (m)<input name="depth_m" type="number" min="0.5" max="3" step="any" value="2" required></label>
+              <label>Orientation (°)<input name="orientation_deg" type="number" min="0" max="360" step="any" value="0" required></label>
+            </div>
+            <p class="hint">Orientation is clockwise from grid north: 0° points the length north, 90° east.</p>
+            <details class="explanation"><summary>Design assumptions</summary>
+              <div class="design-fields">
+                <label>Side slope (horizontal:1 vertical)<input name="side_slope" type="number" min="1" max="4" step="any" value="2" required></label>
+                <label>Freeboard (m)<input name="freeboard_m" type="number" min="0.1" max="1" step="any" value="0.5" required></label>
+                <label>Margin around rim (m)<input name="margin_m" type="number" min="1" max="30" step="any" value="5" required></label>
+              </div>
+              <p class="hint">Level ground and a flat bottom are assumed. The 3 m depth limit and other limits are project assumptions, not safe construction depths inferred from terrain.</p>
+            </details>
+            <button id="calculate-design" type="submit" class="primary">Calculate capacity &amp; check fit</button>
+          </form>
+          <p id="design-status" class="notice" role="status" aria-live="polite"></p>
+          <div id="design-result" hidden></div>
+          <button id="fit-design" type="button" class="text-button" hidden>Zoom to pond footprint</button>
+          <p class="hint">Solid outline: excavation rim. Dashed outline: required margin. Capacity excludes freeboard. Actual stored water and filling behavior will require a seasonal water model.</p>
+        </section>
         <details class="explanation"><summary>How are sites ranked?</summary><p>Sites favor larger connected catchments (75%) and gentler local slopes (25%). The analysis excludes mapped water and applies slope, survey-edge, and spacing checks.</p><p>Catchments follow modeled upstream drainage, including overflow from depressions. An outlet can naturally sit at the downstream edge of its catchment.</p></details>
         <p class="notice">Annual collectible runoff = average annual rainfall × catchment area × runoff fraction. This assumes uniform rainfall and all runoff reaching the site, before storage and collection losses. Every runoff value is an estimate based on these assumptions. Specific catchment uncertainties are explained beside each affected option.</p>
       </section>

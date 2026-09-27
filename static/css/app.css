@@ -607,3 +607,8 @@ input::file-selector-button {
 .water-quantities dt { font-weight: 600; margin-top: 10px; }
 .water-quantities dd { margin: 2px 0 0; color: #53665d; }
 .tooltip-reason { display: block; margin-top: 6px; font-weight: 400; }
+
+#pond-design { margin-top: 18px; border-top: 1px solid #ccd7d0; padding-top: 18px; }
+.design-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
+.design-fields label { font-size: 12px; min-width: 0; }
+.design-fields input { display: block; width: 100%; box-sizing: border-box; padding: 9px; margin-top: 5px; border: 1px solid #ccd7d0; border-radius: 8px; font: inherit; }

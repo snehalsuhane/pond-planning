@@ -48,6 +48,8 @@
   const catchments = L.featureGroup().addTo(map);
   const markers = L.featureGroup().addTo(map);
   const terrainExtent = L.featureGroup();
+  const pondDesign = L.featureGroup().addTo(map);
+  let designRequest = null, designRevision = 0;
   L.control.layers(null, {'Contour preview': contours, 'Land boundary': land, 'Analyzed terrain': terrainExtent}, {position: 'topright'}).addTo(map);
   map.addControl(new L.Control.Draw({
     draw: {polygon: {allowIntersection: false, showArea: true, shapeOptions: {color: '#ad7e26', dashArray: '6 5'}},
@@ -82,6 +84,8 @@
   const sourceInput = $('terrain-source');
   const isPublic = () => sourceInput.value === 'public';
   function clearResults() {
+    clearDesign();
+    $('open-design').disabled = true;
     candidates = [];
     markers.clearLayers();
     catchments.clearLayers();
@@ -252,7 +256,11 @@
     return candidate.catchment?.geometry;
   }
   function selectCandidate(index, fit = true, scroll = false) {
+    if (selected !== index) clearDesign();
     selected = index;
+    $('open-design').disabled = !land.getLayers().length;
+    $('open-design').textContent = `Design this pond · option ${index + 1}`;
+    $('design-help').textContent = land.getLayers().length ? 'Select a pond option, then check a proposed footprint and capacity.' : 'Draw a land boundary and rerun analysis to check whether a pond footprint fits.';
     catchments.clearLayers();
     candidates.forEach((candidate, i) => {
       const card = $('candidate-list').children[i];
@@ -290,6 +298,7 @@
     $('result-count').textContent = String(candidates.length);
     const publicTerrain = data.planning?.terrain_scope === 'buffered_public_dem';
     $('result-meta').textContent = `${data.terrain_source?.name || data.filename} · ${number(data.dem?.resolution_m)} m terrain grid · ${data.waterway_screening?.status === 'screened_against_mapped_water' ? 'Mapped-water screening complete' : 'Water screening not confirmed'}`;
+    if (data.waterway_screening?.source) $('result-meta').textContent += ` · ${data.waterway_screening.source}`;
     $('source-credit').hidden = !publicTerrain;
     const rainfall = data.rainfall;
     $('rainfall-credit').hidden = rainfall?.status !== 'available';
@@ -299,6 +308,7 @@
     if (data.terrain?.geometry) L.geoJSON(data.terrain.geometry, {style: {color: '#68766d', weight: 1.5, dashArray: '5 5', fillOpacity: 0}, interactive: false}).addTo(terrainExtent);
     if (data.land_selection) $('result-meta').textContent += ` · Sites within ${number(data.land_selection.area_ha)} ha of selected land`;
     const coverage = [];
+    if (data.waterway_screening?.coverage_note) coverage.push(data.waterway_screening.coverage_note);
     if (data.land_selection?.partial_terrain_coverage) coverage.push(`The survey covers ${number(data.land_selection.terrain_coverage_fraction * 100, 1)}% of your selected land. Only covered terrain was searched.`);
     if (publicTerrain) coverage.push(`Public surface elevation at 30 m resolution; ${number(data.planning.terrain_buffer_m / 1000)} km of surrounding terrain included.`);
     if (candidates.some(site => site.catchment.boundary_truncated)) coverage.push(publicTerrain
@@ -336,6 +346,87 @@
     if (candidates.length) selectCandidate(0);
     else $('candidate-list').append(element('p', 'notice', 'No suitable pond locations were found. Try a different boundary or contour map.'));
   }
+  function clearDesign(close = true) {
+    ++designRevision;
+    designRequest?.abort();
+    designRequest = null;
+    pondDesign.clearLayers();
+    if (candidates[selected]) {
+      $('map-caption').textContent = `Option ${selected + 1} · ${number(candidates[selected].catchment.area_ha)} ha catchment · ${volumeLabel(candidates[selected])}`;
+      markers.getLayers()[selected]?.openTooltip();
+    }
+    $('design-result').replaceChildren();
+    $('design-result').hidden = true;
+    $('fit-design').hidden = true;
+    $('calculate-design').disabled = false;
+    $('design-status').textContent = '';
+    if (close) $('pond-design').hidden = true;
+  }
+  $('open-design').addEventListener('click', () => {
+    if (!candidates.length || !land.getLayers().length) return;
+    $('pond-design').hidden = false;
+    $('design-title').textContent = `Design pond option ${selected + 1}`;
+    $('pond-design').scrollIntoView({block: 'nearest'});
+  });
+  $('design-form').addEventListener('input', () => {
+    clearDesign(false);
+    $('design-status').textContent = 'Dimensions changed. Recalculate to refresh capacity and map checks.';
+  });
+  $('fit-design').addEventListener('click', () => {
+    const bounds = pondDesign.getBounds();
+    if (bounds.isValid()) map.fitBounds(bounds, {padding: [60, 90], maxZoom: 19, animate: false});
+    if (window.matchMedia('(max-width: 760px)').matches) $('map').scrollIntoView({block: 'start'});
+  });
+  $('design-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!candidates.length || !land.getLayers().length) return;
+    clearDesign(false);
+    const version = designRevision;
+    const controller = new AbortController();
+    designRequest = controller;
+    const timeout = setTimeout(() => controller.abort(), 180000);
+    const site = candidates[selected];
+    const body = Object.fromEntries([...new FormData($('design-form'))].map(([key, value]) => [key, Number(value)]));
+    body.site = {latitude: site.latitude, longitude: site.longitude};
+    body.land_area = land.getLayers()[0].toGeoJSON().geometry;
+    $('calculate-design').disabled = true;
+    $('design-status').textContent = 'Calculating capacity and checking the full footprint against land and mapped water…';
+    try {
+      const response = await fetch('/api/designPond', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body), signal: controller.signal});
+      const data = await response.json();
+      if (version !== designRevision) return;
+      if (!response.ok) throw new Error(data.error || 'Pond design could not be checked.');
+      const passed = data.screening_status === 'passes_checks';
+      const color = passed ? '#167c86' : data.screening_status === 'does_not_fit' ? '#b34535' : '#94682b';
+      L.geoJSON(data.clearance, {style: {color, weight: 2, dashArray: '5 5', fillOpacity: 0}, interactive: false}).addTo(pondDesign);
+      L.geoJSON(data.footprint, {style: {color, weight: 2, fillOpacity: .15}, interactive: false}).addTo(pondDesign);
+      const label = element('span', '', `Proposed capacity: ${number(data.capacity_m3, 0)} m³`);
+      label.append(element('span', 'tooltip-reason', `${number(data.dimensions.depth_m)} m excavation · ${number(data.water_depth_m)} m water depth`));
+      label.append(element('span', 'tooltip-reason', passed ? 'Land and mapped-water checks passed' : data.screening_status === 'does_not_fit' ? 'Does not fit · revise this design' : 'Water check unavailable · unverified'));
+      L.geoJSON(data.water_surface, {style: {color, weight: 1, fillOpacity: .35}})
+        .bindTooltip(label, {permanent: true, direction: 'top', className: 'site-tooltip'}).addTo(pondDesign);
+      markers.getLayers()[selected].closeTooltip();
+      $('design-status').textContent = data.messages.join(' ');
+      $('design-result').append(
+        element('p', 'candidate-volume', `Proposed capacity: ${number(data.capacity_m3, 0)} m³`),
+        element('p', 'hint', `Water depth: ${number(data.water_depth_m)} m · Bottom: ${number(data.bottom_length_m)} × ${number(data.bottom_width_m)} m`),
+        element('p', 'hint', `Excavation footprint: ${number(data.footprint_area_m2)} m² · Land including margin: ${number(data.land_required_m2)} m²`),
+        element('p', 'hint', volumeLabel(site)),
+        element('p', 'hint', data.assumptions));
+      if (data.waterway_screening?.coverage_note) $('design-result').append(element('p', 'hint', data.waterway_screening.coverage_note));
+      $('design-result').hidden = false;
+      $('fit-design').hidden = false;
+      $('map-caption').textContent = `Pond option ${selected + 1} · Proposed capacity ${number(data.capacity_m3, 0)} m³ · ${passed ? 'Map checks passed' : 'Design needs review'}`;
+    } catch (error) {
+      if (version !== designRevision) return;
+      $('design-status').textContent = error.name === 'AbortError' ? 'Design check timed out. Please retry.'
+        : error instanceof TypeError || error instanceof SyntaxError ? 'Design service unavailable. Please retry.' : error.message;
+    } finally {
+      clearTimeout(timeout);
+      if (version === designRevision) { designRequest = null; $('calculate-design').disabled = false; }
+    }
+  });
   $('compare').addEventListener('change', () => selectCandidate(selected, false));
   $('fit-results').addEventListener('click', viewAll);
   $('analyze').addEventListener('click', async () => {

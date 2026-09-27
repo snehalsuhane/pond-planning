@@ -1,13 +1,16 @@
 import numpy as np
 import pytest
 from pyproj import Transformer
-from services.waterways import screen_waterways, WaterwayDataError, fetch_waterways
+from services.waterways import screen_waterways, WaterwayDataError, fetch_overpass_waterways as fetch_waterways
 
 
 @pytest.fixture(autouse=True)
 def isolated_water_cache(monkeypatch, tmp_path):
     import services.waterways as waterways
     waterways._CACHE.clear()
+    waterways._ENDPOINT_FAILURES.clear()
+    monkeypatch.setattr(waterways, '_PREFERRED_ENDPOINT', None)
+    monkeypatch.delenv('OVERPASS_ENDPOINT', raising=False)
     monkeypatch.setenv('WATERWAY_CACHE_DIR', str(tmp_path / 'water-cache'))
     monkeypatch.setattr(waterways.time, 'sleep', lambda _: None)
     yield
@@ -169,3 +172,51 @@ def test_incomplete_results_are_never_cached(monkeypatch, tmp_path):
         fetch_waterways((0, 0, 1, 1))
     assert not waterways._CACHE
     assert not list(tmp_path.rglob('*.json'))
+
+
+def test_third_distinct_provider_recovers_two_failures(monkeypatch):
+    import io
+    import services.waterways as water
+    calls = []
+    def fetch(request, **kwargs):
+        calls.append(request.full_url)
+        if request.full_url != water.THIRD_ENDPOINT:
+            raise TimeoutError('offline')
+        return io.BytesIO(b'{"elements": []}')
+    monkeypatch.setattr(water, 'urlopen', fetch)
+    fetch_waterways((0, 0, 1, 1))
+    assert calls == [water.ENDPOINT, water.FALLBACK_ENDPOINT, water.THIRD_ENDPOINT]
+    calls.clear()
+    fetch_waterways((2, 2, 3, 3))
+    assert calls == [water.THIRD_ENDPOINT]
+
+
+def test_fresh_covering_cache_reused_but_partial_coverage_is_not(monkeypatch):
+    import io
+    import services.waterways as water
+    calls = []
+    def fetch(*args, **kwargs):
+        calls.append(1)
+        return io.BytesIO(b'{"elements": []}')
+    monkeypatch.setattr(water, 'urlopen', fetch)
+    fetch_waterways((0, 0, 3, 3))
+    water._CACHE.clear()
+    fetch_waterways((1, 1, 2, 2))
+    assert len(calls) == 1
+    fetch_waterways((2, 2, 4, 4))
+    assert len(calls) == 2
+
+
+def test_expired_covering_cache_is_not_reused(monkeypatch):
+    import io
+    import services.waterways as water
+    monkeypatch.setattr(water.time, 'time', lambda: 10000.)
+    monkeypatch.setattr(water, 'urlopen', lambda *a, **kw: io.BytesIO(b'{"elements": []}'))
+    fetch_waterways((0, 0, 3, 3))
+    water._CACHE.clear()
+    monkeypatch.setattr(water.time, 'time', lambda: 14000.)
+    def fail(*args, **kwargs):
+        raise TimeoutError('offline')
+    monkeypatch.setattr(water, 'urlopen', fail)
+    with pytest.raises(WaterwayDataError):
+        fetch_waterways((1, 1, 2, 2))
