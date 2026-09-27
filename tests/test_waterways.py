@@ -75,6 +75,40 @@ def test_network_failure_is_not_empty_data(monkeypatch):
         fetch_waterways((0, 0, 1, 1))
 
 
+def test_network_failure_uses_alternate_and_caches_complete_response(monkeypatch):
+    import io
+    from urllib.error import URLError
+    import services.waterways as waterways
+    monkeypatch.delenv('OVERPASS_ENDPOINT', raising=False)
+    calls = []
+    def fetch(request, **kwargs):
+        calls.append(request.full_url)
+        if request.full_url == waterways.ENDPOINT:
+            raise URLError(OSError(101, 'Network is unreachable'))
+        return io.BytesIO(b'{"elements": []}')
+    monkeypatch.setattr(waterways, 'urlopen', fetch)
+    assert fetch_waterways((0, 0, 1, 1)) == {'elements': []}
+    assert calls == [waterways.ENDPOINT, waterways.FALLBACK_ENDPOINT]
+    waterways._CACHE.clear()
+    assert fetch_waterways((0, 0, 1, 1)) == {'elements': []}
+    assert len(calls) == 2
+
+
+def test_custom_endpoint_does_not_fall_back_to_public_service(monkeypatch):
+    from urllib.error import URLError
+    import services.waterways as waterways
+    endpoint = 'https://example.test/api/interpreter'
+    monkeypatch.setenv('OVERPASS_ENDPOINT', endpoint)
+    calls = []
+    def fetch(request, **kwargs):
+        calls.append(request.full_url)
+        raise URLError('unreachable')
+    monkeypatch.setattr(waterways, 'urlopen', fetch)
+    with pytest.raises(WaterwayDataError):
+        fetch_waterways((0, 0, 1, 1))
+    assert calls == [endpoint] * 3
+
+
 def test_gateway_timeout_retries_then_reuses_disk_cache(monkeypatch):
     import io
     import services.waterways as waterways

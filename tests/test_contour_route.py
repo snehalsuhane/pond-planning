@@ -8,6 +8,7 @@ test_kml_parser.py. These tests focus on the HTTP layer.
 """
 
 import io
+import json
 import pytest
 from app import create_app
 
@@ -63,6 +64,44 @@ def _make_valid_kml() -> bytes:
 
 
 VALID_KML: bytes = _make_valid_kml()
+
+
+def test_land_selection_preserves_full_survey_catchments(client):
+    from shapely.geometry import box, mapping, Point
+    selection = box(81.286, 21.256, 81.294, 21.264)
+    baseline = client.post('/api/analyzeContour', data={
+        'contour_map': (io.BytesIO(VALID_KML), 'baseline.kml')}).get_json()
+    response = client.post('/api/analyzeContour', data={
+        'contour_map': (io.BytesIO(VALID_KML), 'selected.kml'),
+        'land_area': json.dumps(mapping(selection))})
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body['pond_candidates'] == baseline['pond_candidates']
+    assert body['land_selection']['partial_terrain_coverage']
+    assert body['planning']['site_scope'] == 'selected_land'
+    assert body['planning']['terrain_scope'] == 'full_uploaded_survey'
+    assert body['planning']['catchments_clipped_to_land'] is False
+    assert all(selection.covers(Point(s['longitude'], s['latitude'])) for s in body['pond_candidates'])
+
+
+def test_selection_outside_survey_fails_before_water_lookup(client, monkeypatch):
+    from shapely.geometry import box, mapping
+    def unexpected_lookup(*args, **kwargs):
+        pytest.fail('Outside-survey land should fail before external water screening')
+    monkeypatch.setattr('services.contour_service.screen_waterways', unexpected_lookup)
+    response = client.post('/api/analyzeContour', data={
+        'contour_map': (io.BytesIO(VALID_KML), 'outside.kml'),
+        'land_area': json.dumps(mapping(box(80, 20, 80.001, 20.001)))})
+    assert response.status_code == 422
+    assert 'does not overlap' in response.get_json()['error']
+
+
+@pytest.mark.parametrize('land', ['not json', 'null', '{}', ''])
+def test_invalid_land_boundary_returns_400(client, land):
+    response = client.post('/api/analyzeContour', data={
+        'contour_map': (io.BytesIO(VALID_KML), 'invalid.kml'), 'land_area': land})
+    assert response.status_code == 400
+    assert 'land_area' in response.get_json()['error']
 
 
 @pytest.fixture

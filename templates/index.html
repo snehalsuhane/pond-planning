@@ -29,7 +29,7 @@
         <h2><span class="step">02</span> Mark your land <small>optional</small></h2>
         <p class="hint">Use the polygon or rectangle tool on the map. Edit or remove it with the tools below.</p>
         <div class="selection-summary"><span>Selected land</span><strong id="selection-area">No boundary drawn</strong></div>
-        <p class="notice">The boundary is a visual reference for now. Analysis covers the uploaded survey; restricting pond sites to your land comes next.</p>
+        <p class="notice">Pond sites must lie inside your land. Catchments can extend beyond it to include upstream runoff. Without a boundary, the whole survey is searched.</p>
       </section>
       <section class="panel actions">
         <button id="analyze" class="primary" disabled>Find pond locations <span aria-hidden="true">↗</span></button>
@@ -38,6 +38,7 @@
       <section id="results" class="results" hidden aria-label="Suggested pond locations">
         <div class="results-heading"><h2>Pond options <span id="result-count"></span></h2><button id="fit-results" class="text-button">View all</button></div>
         <p id="result-meta" class="hint"></p>
+        <p id="coverage-note" class="notice" hidden></p>
         <p class="hint">Select an option to explore its catchment. These are alternatives; overlapping areas should not be added together.</p>
         <div id="candidate-list"></div>
         <details class="explanation"><summary>How are sites ranked?</summary><p>Sites favor larger connected catchments (75%) and gentler local slopes (25%). The analysis excludes mapped water and applies slope, survey-edge, and spacing checks.</p><p>Catchments follow modeled upstream drainage, including overflow from depressions. An outlet can naturally sit at the downstream edge of its catchment.</p></details>

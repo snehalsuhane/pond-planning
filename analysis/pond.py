@@ -40,7 +40,7 @@ class PondCandidateError(ValueError):
 
 
 def rank_pond_candidates(dem_result, slope_result, epsg, *, hydrology=None,
-                         exclusion_mask=None, edge_setback_m=0., max_slope_deg=8.,
+                         exclusion_mask=None, candidate_mask=None, edge_setback_m=0., max_slope_deg=8.,
                          num_candidates=5, min_distance_m=100., border_cells=3,
                          min_catchment_ha=0., max_catchment_ha=None, include_masks=False):
     """Compare whole natural depressions and outlets on a connected drainage network.
@@ -48,6 +48,8 @@ def rank_pond_candidates(dem_result, slope_result, epsg, *, hydrology=None,
     Depression masks are collection targets, not proposed shorelines. Connected
     catchments assume upstream spilling; the unfilled scenario is reported only
     as a sensitivity check. Neither scenario estimates runoff volume.
+    candidate_mask restricts collection targets only; upstream flow still uses
+    the full terrain. A depression must be entirely within this mask.
     """
     for name, value in [('edge_setback_m', edge_setback_m), ('min_distance_m', min_distance_m),
                         ('min_catchment_ha', min_catchment_ha)]:
@@ -63,8 +65,9 @@ def rank_pond_candidates(dem_result, slope_result, epsg, *, hydrology=None,
     slope = np.asarray(slope_result['slope'])
     valid = np.asarray(dem_result.get('valid_mask', np.isfinite(raw)), dtype=bool) & np.isfinite(raw)
     water = np.zeros_like(valid) if exclusion_mask is None else np.asarray(exclusion_mask, dtype=bool)
-    if slope.shape != raw.shape or water.shape != raw.shape:
-        raise ValueError('Slope and exclusion masks must match the DEM')
+    land = np.ones_like(valid) if candidate_mask is None else np.asarray(candidate_mask, dtype=bool)
+    if slope.shape != raw.shape or water.shape != raw.shape or land.shape != raw.shape:
+        raise ValueError('Slope, exclusion and candidate masks must match the DEM')
     res = float(dem_result['resolution_m'])
     if not np.isfinite(res) or res <= 0 or not valid.any():
         raise PondCandidateError('No valid terrain for collection-site screening')
@@ -75,7 +78,7 @@ def rank_pond_candidates(dem_result, slope_result, epsg, *, hydrology=None,
     window = max(3, int(round(30/res)) | 1)
     local_slope = uniform_filter(np.where(valid, slope, 0.), size=window) / np.maximum(
         uniform_filter(valid.astype(float), size=window), 1e-12)
-    allowed = valid & ~water & (distance >= edge_setback_m) & np.isfinite(slope) & (slope <= max_slope_deg)
+    allowed = valid & land & ~water & (distance >= edge_setback_m) & np.isfinite(slope) & (slope <= max_slope_deg)
     if border_cells:
         allowed[:border_cells] = allowed[-border_cells:] = False
         allowed[:, :border_cells] = allowed[:, -border_cells:] = False
@@ -97,7 +100,7 @@ def rank_pond_candidates(dem_result, slope_result, epsg, *, hydrology=None,
             continue
         seeds = np.zeros_like(valid)
         seeds[slices] = local
-        if (seeds & water).any() or not (seeds & allowed).any():
+        if (seeds & water).any() or (seeds & ~land).any() or not (seeds & allowed).any():
             continue
         levels = hydro['conditioned_dem'][seeds]
         if np.ptp(levels) > 1e-5:
@@ -136,6 +139,8 @@ def rank_pond_candidates(dem_result, slope_result, epsg, *, hydrology=None,
         add_target(r, c, np.array([np.ravel_multi_index((r, c), raw.shape)]),
                    acc[r, c], 'drainage_outlet')
     if not targets:
+        if candidate_mask is not None:
+            raise PondCandidateError('No suitable collection area or drainage outlet lies within the selected land. Try a larger or different boundary; natural depressions must fit entirely inside it.')
         raise PondCandidateError('No suitable natural collection area or drainage outlet passes screening')
 
     maximum = max(t['area_cells'] for t in targets)

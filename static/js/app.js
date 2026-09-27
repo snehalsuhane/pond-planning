@@ -1,4 +1,4 @@
-/* Stage 2: contour upload and map exploration. Land selection is a visual reference. */
+/* Contour analysis with land-constrained pond sites and full upstream catchments. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -40,10 +40,19 @@
     land.clearLayers();
     land.addLayer(event.layer);
     updateLand();
+    invalidateSelection();
   });
-  map.on('draw:edited draw:deleted', updateLand);
+  map.on('draw:edited draw:deleted', () => { updateLand(); invalidateSelection(); });
+  map.on('draw:drawstart draw:editstart draw:deletestart', () => {
+    editing = true;
+    invalidateSelection();
+  });
+  map.on('draw:drawstop draw:editstop draw:deletestop', () => {
+    editing = false;
+    invalidateSelection();
+  });
 
-  let candidates = [], selected = 0, request = null, revision = 0;
+  let candidates = [], selected = 0, request = null, revision = 0, editing = false;
   const fileInput = $('contour-file');
   function clearResults() {
     candidates = [];
@@ -60,6 +69,17 @@
     if (!file.size) return 'This file is empty. Choose a contour map with elevation data.';
     if (file.size > 50 * 1024 * 1024) return 'The file exceeds the 50 MB upload limit.';
     return null;
+  }
+  function invalidateSelection() {
+    ++revision;
+    request?.abort();
+    request = null;
+    clearResults();
+    $('analyze').disabled = editing || !!fileError(fileInput.files[0]);
+    $('analyze').textContent = 'Find pond locations ↗';
+    $('map-caption').textContent = land.getLayers().length ? 'Pond sites will be restricted to your land' : 'Analysis will search the full contour survey';
+    status(editing ? 'Finish or cancel the boundary edit before analyzing.'
+      : fileError(fileInput.files[0]) || 'Boundary updated. Run the analysis to refresh pond options.');
   }
   async function preview(file, version) {
     // KMZ parsing stays on the backend; its map extent is available after analysis.
@@ -92,7 +112,7 @@
     updateLand();
     $('analyze').textContent = 'Find pond locations ↗';
     const file = fileInput.files[0], error = fileError(file);
-    $('analyze').disabled = !!error;
+    $('analyze').disabled = editing || !!error;
     $('file-info').textContent = file ? `${file.name} · ${number(file.size / 1024 / 1024)} MB` : 'Your survey supplies the elevation data.';
     $('map-caption').textContent = 'Upload a survey to locate your terrain';
     status(error || 'Survey ready. You can mark your land or run the analysis.', error && file ? 'error' : '');
@@ -149,6 +169,12 @@
     $('results').hidden = false;
     $('result-count').textContent = String(candidates.length);
     $('result-meta').textContent = `${data.filename} · ${number(data.dem?.resolution_m)} m terrain grid · ${data.waterway_screening?.status === 'screened_against_mapped_water' ? 'Mapped-water screening complete' : 'Water screening not confirmed'}`;
+    if (data.land_selection) $('result-meta').textContent += ` · Sites within ${number(data.land_selection.area_ha)} ha of selected land`;
+    const coverage = [];
+    if (data.land_selection?.partial_terrain_coverage) coverage.push(`The survey covers ${number(data.land_selection.terrain_coverage_fraction * 100, 1)}% of your selected land. Only covered terrain was searched.`);
+    if (candidates.some(site => site.catchment.boundary_truncated)) coverage.push('Some catchments reach the survey edge. Their areas are provisional because upstream terrain may be missing. A larger survey is needed to resolve this.');
+    $('coverage-note').textContent = coverage.join(' ');
+    $('coverage-note').hidden = !coverage.length;
     $('fit-results').disabled = !candidates.length;
     $('compare').disabled = candidates.length < 2;
     candidates.forEach((candidate, i) => {
@@ -163,7 +189,7 @@
       card.append(heading, area,
         element('span', 'candidate-info', `${number(candidate.local_slope_deg)}° local slope · ${number(candidate.elevation_m, 1)} m elevation`),
         element('span', 'candidate-info', `${candidate.latitude.toFixed(5)}, ${candidate.longitude.toFixed(5)}`));
-      if (candidate.catchment.boundary_truncated) card.append(element('span', 'flag', 'Catchment reaches the survey boundary'));
+      if (candidate.catchment.boundary_truncated) card.append(element('span', 'flag', 'Provisional area · catchment reaches survey edge'));
       if (candidate.assessment?.routing_sensitivity_fraction > .5) card.append(element('span', 'flag', 'Area depends strongly on modeled overflow'));
       card.addEventListener('click', () => selectCandidate(i));
       $('candidate-list').append(card);
@@ -179,7 +205,7 @@
   $('fit-results').addEventListener('click', viewAll);
   $('analyze').addEventListener('click', async () => {
     const file = fileInput.files[0], error = fileError(file);
-    if (error) { status(error, 'error'); return; }
+    if (error || editing) { status(error || 'Finish the boundary edit first.', 'error'); return; }
     const version = ++revision;
     request?.abort();
     const controller = new AbortController();
@@ -192,6 +218,8 @@
     try {
       const form = new FormData();
       form.append('contour_map', file);
+      const boundary = land.getLayers()[0];
+      if (boundary) form.append('land_area', JSON.stringify(boundary.toGeoJSON().geometry));
       const response = await fetch('/api/analyzeContour', {method: 'POST', body: form, signal: controller.signal});
       const data = await response.json().catch(() => null);
       if (version !== revision) return;
@@ -199,7 +227,7 @@
         throw new Error(data?.error || (response.status === 413 ? 'Upload is too large. Choose a smaller file.' : `Analysis failed (${response.status}). Please try again.`));
       }
       showResults(data);
-      status(candidates.length ? `${candidates.length} pond options found. Select one to explore its catchment.` : 'Analysis complete. No suitable sites found.');
+      status(candidates.length ? `${candidates.length} pond ${candidates.length === 1 ? 'option' : 'options'} found. Select one to explore its catchment.` : 'Analysis complete. No suitable sites found.');
     } catch (error) {
       if (version !== revision) return;
       clearResults();
@@ -209,7 +237,7 @@
       clearTimeout(timeout);
       if (version === revision) {
         request = null;
-        $('analyze').disabled = !!fileError(fileInput.files[0]);
+        $('analyze').disabled = editing || !!fileError(fileInput.files[0]);
         $('analyze').textContent = 'Find pond locations ↗';
       }
     }

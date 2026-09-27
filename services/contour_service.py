@@ -15,6 +15,7 @@ Pipeline:
 """
 
 import os
+import logging
 from werkzeug.utils import secure_filename
 
 import numpy as np
@@ -25,6 +26,7 @@ from analysis.dem import generate_dem, DEMGenerationError
 from analysis.pond import rank_pond_candidates, PondCandidateError
 from analysis.hydrology import run_hydrology
 from services.waterways import screen_waterways, WaterwayDataError
+from utils.land_selection import land_candidate_mask, LandSelectionError
 
 
 def _allowed_extension(filename: str, allowed_extensions: set) -> bool:
@@ -37,7 +39,7 @@ def _allowed_extension(filename: str, allowed_extensions: set) -> bool:
 
 def handle_contour_upload(file, upload_folder: str, allowed_extensions: set,
                           edge_setback_m: float = 100.0, water_buffer_m: float = 30.0,
-                          max_slope_deg: float = 8.0):
+                          max_slope_deg: float = 8.0, land_area=None):
     """
     Validate, save, parse, and analyse a KML/KMZ upload.
 
@@ -109,6 +111,14 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set,
             422,
         )
 
+    # Keep the full survey for upstream routing, even outside the selected land.
+    candidate_mask, land_metadata = None, None
+    if land_area is not None:
+        try:
+            candidate_mask, land_metadata = land_candidate_mask(land_area, dem_result, crs_info['epsg'])
+        except LandSelectionError as exc:
+            return {'status': 'error', 'error': str(exc), 'filename': filename}, 422
+
     # Save DEM arrays to disk alongside the KML for downstream use
     dem_save_path = save_path.rsplit(".", 1)[0] + "_dem.npy"
     np.save(dem_save_path, dem_result["dem"])
@@ -124,11 +134,16 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set,
     try:
         water_mask, water_metadata = screen_waterways(dem_result, epsg, buffer_m=water_buffer_m)
     except WaterwayDataError as exc:
-        return {"status": "error", "error": str(exc), "waterway_screening": {"status": "unavailable"}}, 503
+        logging.getLogger(__name__).warning('Water screening unavailable: %s', exc)
+        return {"status": "error",
+                "error": "Could not check for existing rivers and water bodies. Water-map data is unavailable. Check the server's internet connection and retry. No pond sites were selected without this check.",
+                "error_code": "waterway_screening_unavailable",
+                "waterway_screening": {"status": "unavailable"}}, 503
     try:
         candidates = rank_pond_candidates(
             dem_result, slope_result, epsg, hydrology=hydro,
             exclusion_mask=water_mask, edge_setback_m=edge_setback_m,
+            candidate_mask=candidate_mask,
             max_slope_deg=max_slope_deg,
         )
     except PondCandidateError as exc:
@@ -168,8 +183,12 @@ def handle_contour_upload(file, upload_folder: str, allowed_extensions: set,
                 },
             },
             "pond_candidates": response_candidates,
+            "land_selection": land_metadata,
             "waterway_screening": water_metadata,
             "planning": {"edge_setback_m": edge_setback_m,
+                         "site_scope": "selected_land" if land_metadata else "full_survey",
+                         "terrain_scope": "full_uploaded_survey",
+                         "catchments_clipped_to_land": False,
                          "assessment": "preliminary terrain screening",
                          "drainage_saturation_ha": candidates["drainage_saturation_ha"],
                          "outlet_snap_distance_m": 0.0, "catchment_display_unit": "ha",

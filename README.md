@@ -80,7 +80,9 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Upload a KML/KMZ survey and analyze it through the existing API
 - Preview KML contour lines before analysis; KMZ results locate the map after analysis
 - Draw, edit, or delete one land boundary, with its approximate area shown in hectares
-- The drawn boundary is currently a visual reference; analysis covers the uploaded survey and does not yet restrict sites to the selected land
+- A drawn boundary restricts pond sites to the selected land; upstream catchments still use the full survey and can extend outside that boundary
+- Natural depression targets must fit entirely inside the selected land; editing or deleting the boundary clears old results until analysis is rerun
+- Reports partial survey coverage and marks catchments reaching the survey edge as provisional; uploaded terrain cannot be extended beyond its available coverage
 - Explore up to five numbered pond options, with linked map markers and result cards
 - Display one catchment at a time, preserving polygon holes and multipart geometry; optionally compare all outlines
 - Show catchment hectares, local slope, coordinates, and survey-boundary/overflow qualifications
@@ -150,6 +152,7 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Retrieves mapped rivers, streams, canals and water bodies from OpenStreetMap through Overpass
 - Applies a 30m default exclusion buffer, accounting for mapped channel width and cell size; a natural depression overlapping the buffer is rejected as a whole
 - Retries transient failures up to three times and caches complete responses for one hour in `.cache/waterways/`
+- If the default Overpass server is unreachable, remaining attempts use the [VK Maps public instance](https://wiki.openstreetmap.org/wiki/Overpass_API#Public_Overpass_API_instances); the total remains three attempts. An explicit `OVERPASS_ENDPOINT` override uses only that server
 - Returns `503` when screening is unavailable; expired or incomplete data is not used
 - `OVERPASS_ENDPOINT` and `WATERWAY_CACHE_DIR` are environment overrides; slope and setback settings are in `app.py`
 - Mapping may be incomplete. Water buffers exclude candidate locations but do not alter terrain routing. © OpenStreetMap contributors
@@ -218,6 +221,7 @@ and catchment information.
 | Field | Type | Description |
 |-------|------|-------------|
 | `contour_map` | file | `.kml` or `.kmz` survey file |
+| `land_area` | optional JSON string | WGS84 GeoJSON Polygon (or Polygon Feature), using `[longitude, latitude]` coordinates; restricts collection targets, not upstream catchments |
 
 **Success Response** — `200 OK`
 
@@ -225,6 +229,10 @@ Selected fields from the sample response; geometry and metadata are abbreviated.
 `geometry` contains the complete boundary; `polygon` contains the largest exterior
 ring. Only drainage-outlet catchments include `pour_point`. Internal raster
 indices are not included in the API response.
+`land_selection` reports the submitted geometry, its area in hectares, and the
+fraction covered by survey terrain (or is `null` for a full-survey analysis).
+The survey-edge setback still applies to the terrain boundary, not the selected
+land boundary. Entire raster cells must fit inside the land for site selection.
 
 ```json
 {
@@ -280,9 +288,9 @@ indices are not included in the API response.
 
 | Status | Reason |
 |--------|--------|
-| `400` | Missing `contour_map` field or empty filename |
+| `400` | Missing `contour_map` field, empty filename, or invalid `land_area` geometry |
 | `415` | Unsupported file type (must be `.kml` or `.kmz`) |
-| `422` | File is malformed, unparseable, fails terrain validation, or has no suitable collection target |
+| `422` | File is malformed, fails terrain validation, has no suitable collection target, or selected land contains no complete covered terrain cells |
 | `503` | Existing-water screening is unavailable or incomplete |
 
 **cURL example**

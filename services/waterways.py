@@ -22,6 +22,7 @@ from shapely.geometry import LineString, Polygon
 from shapely.ops import polygonize, unary_union
 
 ENDPOINT = 'https://overpass-api.de/api/interpreter'
+FALLBACK_ENDPOINT = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
 _CACHE = {}
 _LOCK = threading.Lock()
 _LOG = logging.getLogger(__name__)
@@ -41,8 +42,12 @@ def fetch_waterways(bounds, endpoint=None, timeout=30):
 
     Only successful, complete responses are cached. Expired data is never used
     to silently bypass an outage. OVERPASS_ENDPOINT supports a custom instance.
+    Without an override, retries use the alternate global OSM service.
     """
-    endpoint = endpoint or os.environ.get('OVERPASS_ENDPOINT', ENDPOINT)
+    configured_endpoint = endpoint or os.environ.get('OVERPASS_ENDPOINT')
+    endpoint = configured_endpoint or ENDPOINT
+    # Keep three attempts in total. Explicit custom endpoints remain exclusive.
+    endpoints = [endpoint] * 3 if configured_endpoint else [ENDPOINT, FALLBACK_ENDPOINT, FALLBACK_ENDPOINT]
     bbox = ','.join(f'{v:.6f}' for v in bounds)
     query = (f'[out:json][timeout:20];('
              f'nwr["waterway"~"^(river|stream|canal|drain|ditch|riverbank)$"]({bbox});'
@@ -67,10 +72,10 @@ def fetch_waterways(bounds, endpoint=None, timeout=30):
             return record['data']
     except (OSError, ValueError, KeyError, TypeError):
         pass  # Missing, expired or corrupt cache must cause a fresh lookup.
-    request = Request(endpoint, data=urlencode({'data': query}).encode(),
-                      headers={'User-Agent': 'PondPlanning/1.0',
-                               'Content-Type': 'application/x-www-form-urlencoded'})
-    for attempt in range(3):
+    for attempt, request_endpoint in enumerate(endpoints):
+        request = Request(request_endpoint, data=urlencode({'data': query}).encode(),
+                          headers={'User-Agent': 'PondPlanning/1.0',
+                                   'Content-Type': 'application/x-www-form-urlencoded'})
         try:
             with urlopen(request, timeout=timeout) as response:
                 data = json.load(response)
@@ -85,7 +90,8 @@ def fetch_waterways(bounds, endpoint=None, timeout=30):
                     'Water screening is unavailable; retry later or set OVERPASS_ENDPOINT '
                     'to another suitable Overpass instance. No unscreened sites were selected.'
                 ) from exc
-            _LOG.warning('Waterway lookup failed (%s); retrying (%s/3).', exc, attempt + 2)
+            _LOG.warning('Waterway lookup at %s failed (%s); next attempt at %s (%s/3).',
+                         request_endpoint, exc, endpoints[attempt + 1], attempt + 2)
             time.sleep(2**attempt)
     fetched_at = time.time()
     with _LOCK:
@@ -97,7 +103,8 @@ def fetch_waterways(bounds, endpoint=None, timeout=30):
         directory.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(mode='w', dir=directory, delete=False) as output:
             temporary = Path(output.name)
-            json.dump({'endpoint': endpoint, 'query': query, 'fetched_at': fetched_at, 'data': data}, output)
+            json.dump({'endpoint': endpoint, 'served_by': request_endpoint,
+                       'query': query, 'fetched_at': fetched_at, 'data': data}, output)
         os.replace(temporary, cache_path)
     except OSError as exc:
         _LOG.warning('Could not persist waterway cache: %s', exc)
