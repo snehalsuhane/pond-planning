@@ -68,7 +68,7 @@
         <dl class="water-quantities" aria-label="Understanding water quantities">
           <dt>Annual runoff · m³/year</dt><dd>Water potentially arriving during a year. Estimated below for each option.</dd>
           <dt>Pond capacity · m³</dt><dd>Water a designed pond can hold at once. Use “Design this pond” to calculate it from dimensions and depth.</dd>
-          <dt>Stored water · m³</dt><dd>Water remaining at a particular time after inflow, losses, and use. Not calculated yet; requires a storage model.</dd>
+          <dt>Stored water · m³</dt><dd>Water remaining at a particular time after inflow, losses, and use. Use the seasonal storage model after checking a pond design.</dd>
         </dl>
         <div id="candidate-list"></div>
         <button id="open-design" type="button" class="primary" disabled>Design this pond</button>
@@ -96,8 +96,30 @@
           </form>
           <p id="design-status" class="notice" role="status" aria-live="polite"></p>
           <div id="design-result" hidden></div>
+          <section id="storage-panel" hidden aria-label="Seasonal storage">
+            <h3>Seasonal stored water</h3>
+            <p class="hint">Replay historical daily rainfall. These loss defaults are illustrative; adjust them for your scenario. This is not a forecast.</p>
+            <form id="storage-form">
+              <div class="design-fields">
+                <label>Evaporation (mm/day)<input name="evaporation_mm_day" type="number" min="0" max="20" step="any" value="4" required></label>
+                <label>Seepage (mm/day)<input name="seepage_mm_day" type="number" min="0" max="20" step="any" value="1" required></label>
+                <label>Water use (m³/day)<input name="demand_m3_day" type="number" min="0" max="100000" step="any" value="0" required></label>
+                <label>Initial fill fraction (0–1)<input name="initial_storage_fraction" type="number" min="0" max="1" step="any" value="0" required></label>
+              </div>
+              <button id="calculate-storage" type="submit" class="primary">Simulate seasonal storage</button>
+            </form>
+            <p id="storage-status" class="notice" role="status" aria-live="polite"></p>
+            <div id="storage-result" hidden>
+              <p id="storage-summary"></p>
+              <label>Historical year <select id="storage-year"></select></label>
+              <svg id="storage-chart" viewBox="0 0 360 180" role="img" aria-label="End-of-month stored water compared with capacity"></svg>
+              <label>Month to show on map <select id="storage-month"></select></label>
+              <p id="storage-snapshot"></p>
+              <p id="storage-explanation" class="hint"></p>
+            </div>
+          </section>
           <button id="fit-design" type="button" class="text-button" hidden>Zoom to pond footprint</button>
-          <p class="hint">Solid outline: excavation rim. Dashed outline: required margin. Capacity excludes freeboard. Actual stored water and filling behavior will require a seasonal water model.</p>
+          <p class="hint">Solid outline: excavation rim. Dashed outline: required margin. Capacity excludes freeboard. Use the seasonal model below to estimate stored water over time.</p>
         </section>
         <details class="explanation"><summary>How are sites ranked?</summary><p>Sites favor larger connected catchments (75%) and gentler local slopes (25%). The analysis excludes mapped water and applies slope, survey-edge, and spacing checks.</p><p>Catchments follow modeled upstream drainage, including overflow from depressions. An outlet can naturally sit at the downstream edge of its catchment.</p></details>
         <p class="notice">Annual collectible runoff = average annual rainfall × catchment area × runoff fraction. This assumes uniform rainfall and all runoff reaching the site, before storage and collection losses. Every runoff value is an estimate based on these assumptions. Specific catchment uncertainties are explained beside each affected option.</p>

@@ -13,3 +13,16 @@ def design():
     except ValueError as exc:
         return jsonify({'status': 'error', 'error': str(exc)}), 400
     return jsonify(result)
+
+
+@pond_design_bp.post('/simulatePond')
+def simulate():
+    from services.storage import simulate_pond
+    from services.rainfall import RainfallDataError
+    try:
+        result = simulate_pond(request.get_json(silent=True))
+    except RainfallDataError as exc:
+        return jsonify({'status': 'error', 'error': str(exc)}), 503
+    except ValueError as exc:
+        return jsonify({'status': 'error', 'error': str(exc)}), 400
+    return jsonify(result)

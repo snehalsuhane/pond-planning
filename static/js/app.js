@@ -50,6 +50,8 @@
   const terrainExtent = L.featureGroup();
   const pondDesign = L.featureGroup().addTo(map);
   let designRequest = null, designRevision = 0;
+  let storageRequest = null, storageRevision = 0, storageData = null;
+  let checkedDesign = null, storageMapLabel = null;
   L.control.layers(null, {'Contour preview': contours, 'Land boundary': land, 'Analyzed terrain': terrainExtent}, {position: 'topright'}).addTo(map);
   map.addControl(new L.Control.Draw({
     draw: {polygon: {allowIntersection: false, showArea: true, shapeOptions: {color: '#ad7e26', dashArray: '6 5'}},
@@ -347,6 +349,10 @@
     else $('candidate-list').append(element('p', 'notice', 'No suitable pond locations were found. Try a different boundary or contour map.'));
   }
   function clearDesign(close = true) {
+    clearStorage();
+    checkedDesign = null;
+    storageMapLabel = null;
+    $('storage-panel').hidden = true;
     ++designRevision;
     designRequest?.abort();
     designRequest = null;
@@ -403,6 +409,8 @@
       L.geoJSON(data.footprint, {style: {color, weight: 2, fillOpacity: .15}, interactive: false}).addTo(pondDesign);
       const label = element('span', '', `Proposed capacity: ${number(data.capacity_m3, 0)} m³`);
       label.append(element('span', 'tooltip-reason', `${number(data.dimensions.depth_m)} m excavation · ${number(data.water_depth_m)} m water depth`));
+      storageMapLabel = element('span', 'tooltip-reason', '');
+      label.append(storageMapLabel);
       label.append(element('span', 'tooltip-reason', passed ? 'Land and mapped-water checks passed' : data.screening_status === 'does_not_fit' ? 'Does not fit · revise this design' : 'Water check unavailable · unverified'));
       L.geoJSON(data.water_surface, {style: {color, weight: 1, fillOpacity: .35}})
         .bindTooltip(label, {permanent: true, direction: 'top', className: 'site-tooltip'}).addTo(pondDesign);
@@ -415,6 +423,8 @@
         element('p', 'hint', volumeLabel(site)),
         element('p', 'hint', data.assumptions));
       if (data.waterway_screening?.coverage_note) $('design-result').append(element('p', 'hint', data.waterway_screening.coverage_note));
+      checkedDesign = passed ? body : null;
+      $('storage-panel').hidden = !passed;
       $('design-result').hidden = false;
       $('fit-design').hidden = false;
       $('map-caption').textContent = `Pond option ${selected + 1} · Proposed capacity ${number(data.capacity_m3, 0)} m³ · ${passed ? 'Map checks passed' : 'Design needs review'}`;
@@ -425,6 +435,85 @@
     } finally {
       clearTimeout(timeout);
       if (version === designRevision) { designRequest = null; $('calculate-design').disabled = false; }
+    }
+  });
+  function clearStorage() {
+    ++storageRevision;
+    storageRequest?.abort();
+    storageRequest = null;
+    storageData = null;
+    if (storageMapLabel) storageMapLabel.textContent = '';
+    $('storage-result').hidden = true;
+    $('storage-status').textContent = '';
+    $('calculate-storage').disabled = false;
+  }
+  $('storage-form').addEventListener('input', () => {
+    clearStorage();
+    $('storage-status').textContent = 'Assumptions changed. Run the simulation again.';
+  });
+  function renderStorage() {
+    if (!storageData) return;
+    const year = $('storage-year').value;
+    const rows = storageData.monthly.filter(row => row.month.startsWith(year));
+    const row = rows[Number($('storage-month').value)];
+    const annual = storageData.annual.find(item => String(item.year) === year);
+    const cap = storageData.capacity_m3;
+    $('storage-summary').textContent = `${storageData.annual.filter(item => item.days_full > 0).length} of ${storageData.annual.length} historical years reached capacity. ${year}: overflow ${number(annual.overflow_m3, 0)} m³; water use supplied ${number(annual.supplied_m3, 0)} m³; unmet use ${number(annual.unmet_demand_m3, 0)} m³.`;
+    const snapshot = `${row.month} month end: estimated stored water ${number(row.end_storage_m3, 0)} m³ (${number(100 * row.end_storage_m3 / cap, 0)}% full)`;
+    $('storage-snapshot').textContent = `${snapshot}. Monthly inflow ${number(row.inflow_m3, 0)} m³; overflow ${number(row.overflow_m3, 0)} m³; evaporation ${number(row.evaporation_m3, 0)} m³; seepage ${number(row.seepage_m3, 0)} m³.`;
+    if (storageMapLabel) storageMapLabel.textContent = snapshot;
+    const svg = $('storage-chart');
+    svg.replaceChildren();
+    const node = (tag, attrs, text) => {
+      const item = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      Object.entries(attrs).forEach(([key, value]) => item.setAttribute(key, value));
+      if (text) item.textContent = text;
+      svg.append(item);
+      return item;
+    };
+    node('title', {}, `End-of-month stored water in ${year}, capacity ${number(cap, 0)} cubic metres`);
+    node('line', {x1: 15, y1: 30, x2: 345, y2: 30, stroke: '#88988e', 'stroke-dasharray': '5 4'});
+    node('text', {x: 15, y: 18}, `Capacity ${number(cap, 0)} m³`);
+    node('polyline', {points: rows.map((r, i) => `${15+i*30},${145-115*r.end_storage_m3/cap}`).join(' '), fill: 'none', stroke: '#167c86', 'stroke-width': 3});
+    rows.forEach((r, i) => node('circle', {cx: 15+i*30, cy: 145-115*r.end_storage_m3/cap,
+      r: i === Number($('storage-month').value) ? 5 : 2, fill: '#167c86'}));
+    node('text', {x: 15, y: 172}, 'Jan');
+    node('text', {x: 310, y: 172}, 'Dec');
+    node('text', {x: 15, y: 158}, '0 m³');
+  }
+  $('storage-year').addEventListener('change', renderStorage);
+  $('storage-month').addEventListener('change', renderStorage);
+  $('storage-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!checkedDesign) return;
+    clearStorage();
+    const version = storageRevision;
+    const controller = new AbortController();
+    storageRequest = controller;
+    const timeout = setTimeout(() => controller.abort(), 65000);
+    const settings = Object.fromEntries([...new FormData($('storage-form'))].map(([key, value]) => [key, Number(value)]));
+    $('calculate-storage').disabled = true;
+    $('storage-status').textContent = 'Simulating daily storage across historical rainfall years…';
+    try {
+      const response = await fetch('/api/simulatePond', {method: 'POST', headers: {'Content-Type': 'application/json'}, signal: controller.signal,
+        body: JSON.stringify({...checkedDesign, ...settings, catchment: candidates[selected].catchment.geometry,
+          runoff_coefficient: Number($('runoff-coefficient').value)})});
+      const data = await response.json();
+      if (version !== storageRevision) return;
+      if (!response.ok) throw new Error(data.error || 'Storage simulation failed.');
+      storageData = data;
+      $('storage-year').replaceChildren(...data.annual.map(row => new Option(row.year, row.year)));
+      $('storage-month').replaceChildren(...Array.from({length: 12}, (_, i) => new Option(new Date(2020, i, 1).toLocaleString(undefined, {month: 'long'}), i)));
+      $('storage-explanation').textContent = `${data.rainfall.source}, ${data.rainfall.start_year}–${data.rainfall.end_year}. ${data.explanation}`;
+      $('storage-result').hidden = false;
+      $('storage-status').textContent = 'Simulation complete. Choose a year and month to inspect stored water on the map.';
+      renderStorage();
+    } catch (error) {
+      if (version !== storageRevision) return;
+      $('storage-status').textContent = error.name === 'AbortError' ? 'Simulation timed out. Please retry.' : error instanceof TypeError || error instanceof SyntaxError ? 'Storage service unavailable. Please retry.' : error.message;
+    } finally {
+      clearTimeout(timeout);
+      if (version === storageRevision) { storageRequest = null; $('calculate-storage').disabled = false; }
     }
   });
   $('compare').addEventListener('change', () => selectCandidate(selected, false));

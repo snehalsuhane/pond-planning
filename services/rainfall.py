@@ -19,7 +19,7 @@ class RainfallDataError(ValueError):
     """Complete historical rainfall could not be obtained."""
 
 
-def summarize_rainfall(data, start_year, end_year):
+def summarize_rainfall(data, start_year, end_year, include_daily=False):
     """Require every calendar day, including leap days; never treat missing as zero."""
     try:
         header = data['header']
@@ -30,6 +30,7 @@ def summarize_rainfall(data, start_year, end_year):
             raise ValueError('Unexpected precipitation metadata')
         daily = data['properties']['parameter']['PRECTOTCORR']
         annual = {}
+        validated_daily = {}
         for year in range(start_year, end_year + 1):
             day, stop = date(year, 1, 1), date(year + 1, 1, 1)
             values = []
@@ -39,18 +40,23 @@ def summarize_rainfall(data, start_year, end_year):
                         or not math.isfinite(value) or value < 0 or value == header.get('fill_value')):
                     raise ValueError('Missing or invalid precipitation')
                 values.append(value)
+                if include_daily:
+                    validated_daily[day.strftime('%Y%m%d')] = value
                 day += timedelta(days=1)
             annual[str(year)] = math.fsum(values)
-        return {'status': 'available', 'source': 'NASA POWER', 'source_url': SOURCE_URL,
+        result = {'status': 'available', 'source': 'NASA POWER', 'source_url': SOURCE_URL,
                 'parameter': 'PRECTOTCORR', 'time_standard': 'UTC',
                 'start_year': start_year, 'end_year': end_year,
                 'annual_totals_mm': annual,
                 'mean_annual_mm': math.fsum(annual.values()) / len(annual)}
+        if include_daily:
+            result['daily_mm'] = validated_daily
+        return result
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise RainfallDataError('Historical rainfall is incomplete or invalid.') from exc
 
 
-def fetch_rainfall(latitude, longitude):
+def fetch_rainfall(latitude, longitude, include_daily=False):
     """One regional point for the last ten complete years, cached for 30 days."""
     end_year = date.today().year - 1
     start_year = end_year - 9
@@ -64,7 +70,7 @@ def fetch_rainfall(latitude, longitude):
     cache = cache_dir / (hashlib.sha256(url.encode()).hexdigest() + '.json')
     try:
         if time.time() - cache.stat().st_mtime < 30 * 86400:
-            summary = summarize_rainfall(json.loads(cache.read_text()), start_year, end_year)
+            summary = summarize_rainfall(json.loads(cache.read_text()), start_year, end_year, include_daily=include_daily)
             return dict(summary, location={'latitude': latitude, 'longitude': longitude})
     except (OSError, ValueError, TypeError):
         pass
@@ -72,7 +78,7 @@ def fetch_rainfall(latitude, longitude):
         request = Request(url, headers={'User-Agent': 'VillagePondPlanner/1.0'})
         with urlopen(request, timeout=45) as response:
             data = json.load(response)
-        summary = summarize_rainfall(data, start_year, end_year)
+        summary = summarize_rainfall(data, start_year, end_year, include_daily=include_daily)
     except (OSError, ValueError, TypeError) as exc:
         raise RainfallDataError('Historical rainfall is unavailable. Retry the analysis later.') from exc
     # Cache failure must not discard a valid provider response. Atomic replacement

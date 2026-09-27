@@ -25,7 +25,7 @@ def number(data, key, default, minimum, maximum):
     return value
 
 
-def design_pond(data, water_buffer_m=30.):
+def design_pond(data, water_buffer_m=30., *, screen_water=True):
     """Dimensions are excavation rim dimensions; depth includes freeboard.
 
     This assumes level ground and uniform side slopes, not surveyed earthworks.
@@ -95,6 +95,8 @@ def design_pond(data, water_buffer_m=30.):
         result['messages'].append('The excavation and its margin do not fit entirely inside the selected land. Reduce dimensions or choose another site.')
         # No provider request needed to reject a footprint that already fails.
         return result
+    if not screen_water:
+        return result  # Geometry reuse for storage; does not certify water screening.
     left, bottom, right, top = clearance.bounds
     # Geometry-only screening: two bounding coordinates and zero cell padding.
     # Intersect the complete footprint, not just its corners or raster centres.

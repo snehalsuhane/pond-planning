@@ -98,7 +98,7 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Provide upload validation, loading feedback, and retryable error messages on desktop and mobile
 - Show the terrain source, resolution, surrounding extent, and coverage qualifications; the analyzed terrain outline is available in the map layer control
 - Show estimated annual collectible runoff (m³/year) on each result card and map label, with an adjustable runoff fraction
-- Explain annual runoff, pond capacity, and stored water separately; capacity is calculated in the pond-design panel, while stored water remains uncalculated
+- Explain annual runoff, pond capacity, and stored water separately; capacity is calculated in the pond-design panel, and historical stored water is estimated in its seasonal model
 
 ### Rainfall & Water Volume — `services/rainfall.py`, `services/water_volume.py`
 - Retrieves daily corrected precipitation from [NASA POWER](https://power.larc.nasa.gov/docs/services/api/temporal/daily/) for the last ten complete calendar years, then averages the annual totals
@@ -119,7 +119,7 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Checks the entire rotated footprint and margin against selected land, including holes, and against mapped-water buffers. These checks do not establish ground stability, inlet/outlet suitability, or actual water availability
 - Shows the rim, water surface, margin, capacity and water depth on the map. Designs that do not fit are red; unavailable water screening is amber and never reported as passing
 - Design edits clear stale capacity and overlays; changing candidate, land, or terrain source clears the previous design. Recalculating uses a separate endpoint without rerunning terrain, catchments or rainfall
-- Input limits (including 3 m maximum excavation depth) are project assumptions. Actual stored water, seasonal filling and automatic size recommendations are later steps
+- Input limits (including 3 m maximum excavation depth) are project assumptions. Seasonal stored water is estimated separately; automatic size recommendations remain a later step
 
 ### Public Elevation — `services/elevation.py`
 - Retrieves [Copernicus GLO-30](https://copernicus-dem-30m.s3.amazonaws.com/readme.html) elevation windows from public Cloud Optimized GeoTIFFs; no API key is needed
@@ -322,6 +322,35 @@ capacity remain available, with `avoids_mapped_water: null` and status `unverifi
 If land containment fails, water screening is skipped. Invalid inputs return `400`.
 The endpoint screens the submitted design; it does not generate or rank a site.
 
+### `POST /api/simulatePond`
+
+Accepts the same design inputs as `/api/designPond`, plus a `catchment` GeoJSON
+Polygon or MultiPolygon from the terrain result. Optional inputs are
+`runoff_coefficient` (0–1, default 0.3), `evaporation_mm_day` (0–20, default 4),
+`seepage_mm_day` (0–20, default 1), `demand_m3_day` (0–100000, default 0), and
+`initial_storage_fraction` (0–1, default 0). Input bounds are project limits.
+
+Reuses the cached NASA POWER daily rainfall at the selected land's centroid.
+Returns `capacity_m3`, rainfall metadata, assumptions, monthly and annual balances,
+and period totals with a `balance_residual_m3` conservation check. Each day adds
+catchment runoff and direct rain, spills water above capacity, subtracts evaporation
+and seepage, then supplies water use up to the available volume. Loss depths apply
+to the changing water surface after inflow. Rain falling within the excavation rim
+is assumed to drain entirely into the pond; its overlap is removed from catchment
+runoff to avoid double counting. Storage carries between years without resetting.
+
+The UI offers this after a design passes map checks. Select a historical year and
+month to inspect the storage chart and month-end volume on the pond's map label.
+Reports include years reaching capacity, overflow and unmet water use. Editing
+assumptions clears stale storage; editing dimensions or changing sites clears the
+design and simulation. This endpoint recalculates geometry but does not repeat
+terrain analysis or water screening, and does not certify a submitted site's suitability.
+Invalid inputs return `400`; unavailable rainfall returns `503` without inventing
+storage values. The existing design remains visible when simulation fails.
+
+Loss defaults are illustrative, not local measurements. Results inherit catchment
+uncertainty and are historical scenarios, not forecasts or guaranteed yields.
+
 ### `POST /api/analyzeContour`
 
 Accepts a KML or KMZ contour survey file, parses it, validates the terrain
@@ -421,7 +450,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-334 tests across 17 test modules.
+351 tests across 18 test modules.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -441,6 +470,7 @@ python -m pytest tests/ -v
 | `test_places.py` | 11 | Submitted location search, caching, rate limiting and provider failures |
 | `test_rainfall.py` | 11 | Complete calendar coverage, units, invalid days, cache and provider failures |
 | `test_water_volume.py` | 17 | Annual runoff formula, coefficient limits, provisional status and unavailable rainfall |
+| `test_storage.py` | 17 | Daily water conservation, leap years, carry-over, loss limits, direct rain, validation and outages |
 | `test_pond_design.py` | 17 | Sloped capacity, freeboard, rotation, full-footprint containment, water intersections and API validation |
 
 ---
@@ -495,4 +525,5 @@ and generated plots are kept locally and excluded from Git.
 - [x] Existing-water screening and separate catchment visualisations
 - [x] Historical rainfall and annual runoff estimates with map labels
 - [x] Interactive pond footprint, proposed depth, capacity and land/water fit checks
-- [ ] Seasonal storage, automatic size recommendations, soil suitability and field validation
+- [x] Historical seasonal storage with adjustable losses and water use
+- [ ] Automatic size recommendations, soil suitability and field validation

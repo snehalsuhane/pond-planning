@@ -53,6 +53,10 @@ def test_fetch_uses_complete_years_and_reuses_valid_cache(monkeypatch, tmp_path)
     first = rainfall.fetch_rainfall(21.23456, 81.23456)
     assert first == rainfall.fetch_rainfall(21.23456, 81.23456)
     assert len(calls) == 1
+    daily = rainfall.fetch_rainfall(21.23456, 81.23456, include_daily=True)
+    assert sum(daily['daily_mm'].values()) == sum(first['annual_totals_mm'].values())
+    assert 'daily_mm' not in first
+    assert len(calls) == 1
     assert f'start={end-9}0101' in calls[0] and f'end={end}1231' in calls[0]
     assert first['location'] == {'latitude': 21.235, 'longitude': 81.235}
     next(tmp_path.glob('*.json')).write_text('{}')
