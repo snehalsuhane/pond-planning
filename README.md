@@ -98,6 +98,7 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Provide upload validation, loading feedback, and retryable error messages on desktop and mobile
 - Show the terrain source, resolution, surrounding extent, and coverage qualifications; the analyzed terrain outline is available in the map layer control
 - Show estimated annual collectible runoff (m³/year) on each result card and map label, with an adjustable runoff fraction
+- Explain annual runoff, pond capacity, and stored water separately; capacity and stored water are marked as not yet calculated
 
 ### Rainfall & Water Volume — `services/rainfall.py`, `services/water_volume.py`
 - Retrieves daily corrected precipitation from [NASA POWER](https://power.larc.nasa.gov/docs/services/api/temporal/daily/) for the last ten complete calendar years, then averages the annual totals
@@ -106,7 +107,7 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Estimates annual collectible runoff as `rainfall_mm / 1000 × catchment_area_m2 × runoff_coefficient`
 - The default runoff coefficient is **0.30** (30% of rainfall becomes runoff), an illustrative project assumption. Users can choose a value from 0 to 1 before analysis; changing it clears previous results until analysis is rerun
 - Assumes uniform rainfall and that all modeled runoff reaches the collection target. Does not estimate pond depth, storage capacity, evaporation, seepage, or conveyance losses; this is potential annual inflow, not guaranteed yield
-- Retains the existing ranking. Volumes inherit provisional status when catchments reach the terrain edge or depend strongly on modeled depression overflow. Overlapping alternatives must not be added together
+- Retains the existing ranking. The API retains provisional status when catchments reach the terrain edge or depend strongly on modeled depression overflow; cards and map labels explain the specific reasons. Overlapping alternatives must not be added together
 - Caches complete rainfall responses for 30 days in `.cache/rainfall/` (`RAINFALL_CACHE_DIR` can override the directory). If rainfall retrieval fails, pond/catchment results remain available with volume marked unavailable
 
 ### Public Elevation — `services/elevation.py`
@@ -177,7 +178,7 @@ The map libraries and OpenStreetMap base map also require internet access.
 - Cells steeper than `max_slope_deg` (default 8°), within the survey-edge setback (default 100m), or on mapped water are excluded
 - Implements a greedy selection algorithm ensuring all returned candidates are at least `min_distance_m` (default 100m) apart
 - Near-duplicate catchments (intersection-over-union ≥ 80%) are skipped; remaining alternatives can overlap and should not be added as independent supplies
-- Ranking weights are screening assumptions. Pond shape, depth and capacity remain outside this phase; rainfall–runoff estimates do not alter the ranking
+- Ranking weights are screening assumptions. Pond shape, depth and capacity are planned next; rainfall–runoff estimates do not alter the ranking
 
 ### Existing-Water Screening — `services/waterways.py`
 - Retrieves mapped rivers, streams, canals and water bodies from OpenStreetMap through Overpass
@@ -273,7 +274,9 @@ Returns `pond_candidates`, `land_selection`, `waterway_screening`, `terrain`,
 `dem`, and `planning`, plus `terrain_source` with the provider and source links.
 Both analysis routes also return `rainfall` (period, annual totals, mean annual mm,
 and query location), `water_volume_model` (formula and assumptions), and
-`water_volume` on each candidate: `{annual_m3, unit: "m3/year", status}`.
+`water_volume` on each candidate: `{annual_m3, unit: "m3/year", status, uncertainty_reasons}`.
+`uncertainty_reasons` contains code/message pairs for terrain-edge coverage and
+overflow-sensitive catchments; both reasons are returned when applicable.
 Volume status is `estimated`, `provisional`, or `unavailable`. Rainfall failure
 keeps a successful analysis response, with `rainfall.status: "unavailable"` and
 `annual_m3: null`; a valid zero runoff coefficient produces zero volume.
@@ -387,7 +390,7 @@ curl -X POST http://localhost:5000/api/analyzeContour \
 python -m pytest tests/ -v
 ```
 
-301 tests across 15 test modules — all passing.
+303 tests across 15 test modules — all passing.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -405,7 +408,7 @@ python -m pytest tests/ -v
 | `test_elevation.py` | 10 | Public elevation windows, projection, seams, limits and caching |
 | `test_places.py` | 11 | Submitted location search, caching, rate limiting and provider failures |
 | `test_rainfall.py` | 11 | Complete calendar coverage, units, invalid days, cache and provider failures |
-| `test_water_volume.py` | 15 | Annual runoff formula, coefficient limits, provisional status and unavailable rainfall |
+| `test_water_volume.py` | 17 | Annual runoff formula, coefficient limits, provisional status and unavailable rainfall |
 
 ---
 

@@ -46,11 +46,19 @@ def add_water_volumes(result, coefficient, land=None):
         rainfall = {'status': 'unavailable', 'reason': 'Historical rainfall could not be retrieved. Retry the analysis to estimate water volume.'}
     result['rainfall'] = rainfall
     for site in sites:
-        provisional = (site['catchment'].get('boundary_truncated', False)
-                       or site.get('assessment', {}).get('routing_sensitivity_fraction', 0) > .5)
+        uncertainty_reasons = []
+        if site['catchment'].get('boundary_truncated', False):
+            uncertainty_reasons.append({
+                'code': 'catchment_reaches_terrain_edge',
+                'message': 'Catchment reaches the analyzed terrain edge; upstream land may be missing.'})
+        if site.get('assessment', {}).get('routing_sensitivity_fraction', 0) > .5:
+            uncertainty_reasons.append({
+                'code': 'overflow_sensitive_catchment',
+                'message': 'Catchment area and runoff depend strongly on upstream depressions filling and overflowing.'})
         available = rainfall['status'] == 'available'
         site['water_volume'] = {
             'annual_m3': (rainfall['mean_annual_mm'] / 1000 * site['catchment']['area_m2'] * coefficient) if available else None,
             'unit': 'm3/year',
-            'status': ('provisional' if provisional else 'estimated') if available else 'unavailable',
+            'uncertainty_reasons': uncertainty_reasons,
+            'status': ('provisional' if uncertainty_reasons else 'estimated') if available else 'unavailable',
         }

@@ -23,18 +23,26 @@ def test_volume_formula_preserves_ranking(monkeypatch, coefficient, expected):
     result = {'pond_candidates': [deepcopy(site)]}
     volume.add_water_volumes(result, coefficient)
     got = result['pond_candidates'][0]
-    assert got.pop('water_volume') == {'annual_m3': expected, 'unit': 'm3/year', 'status': 'estimated'}
+    assert got.pop('water_volume') == {'annual_m3': expected, 'unit': 'm3/year', 'status': 'estimated', 'uncertainty_reasons': []}
     assert got == site
 
 
-@pytest.mark.parametrize('truncated,sensitivity', [(True, 0.), (False, .8)])
+@pytest.mark.parametrize('truncated,sensitivity', [(True, 0.), (False, .8), (True, .8), (False, .5)])
 def test_uncertain_catchment_means_provisional_volume(monkeypatch, truncated, sensitivity):
     monkeypatch.setattr(volume, 'fetch_rainfall', fake_rainfall)
     result = {'pond_candidates': [{'latitude': 21., 'longitude': 81.,
               'catchment': {'area_m2': 100., 'boundary_truncated': truncated},
               'assessment': {'routing_sensitivity_fraction': sensitivity}}]}
     volume.add_water_volumes(result, .3)
-    assert result['pond_candidates'][0]['water_volume']['status'] == 'provisional'
+    estimate = result['pond_candidates'][0]['water_volume']
+    expected = []
+    if truncated:
+        expected.append('catchment_reaches_terrain_edge')
+    if sensitivity > .5:
+        expected.append('overflow_sensitive_catchment')
+    assert estimate['status'] == ('provisional' if expected else 'estimated')
+    assert [reason['code'] for reason in estimate['uncertainty_reasons']] == expected
+    assert all(reason['message'] for reason in estimate['uncertainty_reasons'])
 
 
 def test_outage_preserves_sites_with_null_volume(monkeypatch):
@@ -44,4 +52,4 @@ def test_outage_preserves_sites_with_null_volume(monkeypatch):
     result = {'pond_candidates': [{'latitude': 21., 'longitude': 81., 'catchment': {'area_m2': 100.}}]}
     volume.add_water_volumes(result, .3)
     assert result['rainfall']['status'] == 'unavailable'
-    assert result['pond_candidates'][0]['water_volume'] == {'annual_m3': None, 'unit': 'm3/year', 'status': 'unavailable'}
+    assert result['pond_candidates'][0]['water_volume'] == {'annual_m3': None, 'unit': 'm3/year', 'status': 'unavailable', 'uncertainty_reasons': []}

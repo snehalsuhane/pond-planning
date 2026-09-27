@@ -245,8 +245,8 @@
   }
   function volumeLabel(candidate) {
     const volume = candidate.water_volume;
-    if (!Number.isFinite(volume?.annual_m3)) return 'Water volume unavailable';
-    return `${number(volume.annual_m3, 0)} m³/year${volume.status === 'provisional' ? ' · provisional' : ' · estimated'}`;
+    if (!Number.isFinite(volume?.annual_m3)) return 'Annual runoff unavailable';
+    return `Estimated annual runoff: ${number(volume.annual_m3, 0)} m³/year`;
   }
   function geometry(candidate) {
     return candidate.catchment?.geometry;
@@ -302,8 +302,8 @@
     if (data.land_selection?.partial_terrain_coverage) coverage.push(`The survey covers ${number(data.land_selection.terrain_coverage_fraction * 100, 1)}% of your selected land. Only covered terrain was searched.`);
     if (publicTerrain) coverage.push(`Public surface elevation at 30 m resolution; ${number(data.planning.terrain_buffer_m / 1000)} km of surrounding terrain included.`);
     if (candidates.some(site => site.catchment.boundary_truncated)) coverage.push(publicTerrain
-      ? 'Some catchments still reach the analyzed terrain edge. Their areas remain provisional because upstream terrain may be missing.'
-      : 'Some catchments reach the survey edge. Their areas are provisional because upstream terrain may be missing. A larger survey is needed to resolve this.');
+      ? 'Some catchments still reach the analyzed terrain edge. Their areas and runoff estimates may be incomplete because upstream land may be missing.'
+      : 'Some catchments reach the survey edge. Their areas and runoff estimates may be incomplete because upstream land may be missing. A larger survey is needed to resolve this.');
     if (data.planning?.coverage_note) coverage.push(data.planning.coverage_note);
     $('coverage-note').textContent = coverage.join(' ');
     $('coverage-note').hidden = !coverage.length;
@@ -322,12 +322,13 @@
         element('span', 'candidate-volume', volumeLabel(candidate)),
         element('span', 'candidate-info', `${number(candidate.local_slope_deg)}° local slope · ${number(candidate.elevation_m, 1)} m elevation`),
         element('span', 'candidate-info', `${candidate.latitude.toFixed(5)}, ${candidate.longitude.toFixed(5)}`));
-      if (candidate.catchment.boundary_truncated) card.append(element('span', 'flag', 'Provisional area · catchment reaches terrain edge'));
-      if (candidate.assessment?.routing_sensitivity_fraction > .5) card.append(element('span', 'flag', 'Area depends strongly on modeled overflow'));
+      const reasons = candidate.water_volume?.uncertainty_reasons || [];
+      reasons.forEach(reason => card.append(element('span', 'flag', reason.message)));
       card.addEventListener('click', () => selectCandidate(i));
       $('candidate-list').append(card);
       const label = element('span', '', `Option ${i + 1} · ${number(candidate.catchment.area_ha)} ha`);
       label.append(element('span', 'tooltip-volume', volumeLabel(candidate)));
+      reasons.forEach(reason => label.append(element('span', 'tooltip-reason', reason.message)));
       L.marker([candidate.latitude, candidate.longitude], {title: `Option ${i + 1}: ${title}`, alt: `Pond option ${i + 1}`})
         .bindTooltip(label, {direction: 'top', offset: [0, -17], className: 'site-tooltip'})
         .on('click', () => selectCandidate(i, true, true)).addTo(markers);
