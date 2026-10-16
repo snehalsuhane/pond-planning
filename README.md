@@ -593,6 +593,110 @@ and generated plots are kept locally and excluded from Git.
 
 ---
 
+## OpenTelemetry Observability
+
+The Village Pond Planning System includes full OpenTelemetry (OTel) observability across **Traces**, **Metrics**, and **Logs**.
+
+### Architecture
+
+```
+                  ┌────────────────────────────────────────────────────────┐
+                  │           Village Pond Planning Flask App              │
+                  │                                                        │
+                  │  • Auto-instrumentation: Flask HTTP & Requests         │
+                  │  • Manual Spans: Terrain, DEM, Hydrology, Screening    │
+                  │  • Custom Metrics: Counters, Histograms, Gauges        │
+                  │  • JSON Formatter: Log-to-Trace Context Correlation    │
+                  └─────────────────────────┬──────────────────────────────┘
+                                            │
+               ┌────────────────────────────┼──────────────────────────┐
+               ▼                            ▼                          ▼
+       [Traces / OTLP HTTP]        [Prometheus Scrape]          [Correlated Logs]
+               │                            │                          │
+               ▼                            ▼                          ▼
+        Jaeger All-in-One           Prometheus Metric          Rotating JSON File
+      (http://localhost:16686)     (http://localhost:9464)    (logs/otel_app.jsonl)
+       Port 4318 (OTLP/HTTP)              /metrics            trace_id & span_id injected
+```
+
+### Observability Endpoints
+
+| Component | Endpoint | Purpose |
+| :--- | :--- | :--- |
+| **Jaeger UI** | `http://localhost:16686` | Interactive trace search, timeline, and waterfall views |
+| **Jaeger OTLP Collector** | `http://localhost:4318` | Ingests OTLP/HTTP traces |
+| **Prometheus Metrics** | `http://localhost:9464/metrics` | Prometheus metrics scrape endpoint |
+| **Flask Application** | `http://localhost:5000` | Application UI and REST API |
+| **Structured Logs** | `logs/otel_app.jsonl` | JSON-lines log with correlated `trace_id` & `span_id` |
+
+### Captured Data
+
+1. **Traces**:
+   - Auto-captured server HTTP requests (`GET /`, `POST /api/analyzeContour`, `POST /api/designPond`, `GET /api/places/search`, etc.).
+   - Child spans for key domain analysis stages:
+     - `contour.parse_kml`
+     - `contour.analyze_terrain`
+     - `contour.project_coordinates`
+     - `contour.generate_dem`
+     - `contour.calculate_slope`
+     - `contour.run_hydrology`
+     - `contour.screen_waterways`
+     - `contour.rank_pond_candidates`
+     - `area.fetch_elevation`, `area.land_candidate_mask`, etc.
+   - Outgoing HTTP calls (NASA POWER, OSM Overpass) traced via `RequestsInstrumentor`.
+
+2. **Metrics**:
+   - `http_requests_total`: Counter partitioned by route, HTTP method, and status code.
+   - `http_errors_total`: Counter for 4xx/5xx responses.
+   - `request_duration_ms`: Latency histogram across endpoints.
+   - `contour_uploads_total`: Counter for uploaded survey files (labeled by extension).
+   - `pond_analyses_total`: Counter of completed pond candidate analyses.
+   - `pond_candidates_found`: Histogram of viable pond candidates found per run.
+   - `elevation_fetches_total` & `elevation_cache_hits`: Copernicus DEM cache telemetry.
+   - `waterway_screens_total`: OpenStreetMap water screening calls.
+
+3. **Structured Logs**:
+   - Every log message emitted during request processing automatically includes the active `trace_id` and `span_id`.
+
+### Running with OpenTelemetry
+
+To run Jaeger and the instrumented Flask application together:
+
+```bash
+source ~/my_env/bin/activate
+bash run_with_otel.sh
+```
+
+Or manually:
+```bash
+# 1. Start Jaeger (downloads binary automatically to .jaeger/ on first run)
+bash scripts/start_jaeger.sh &
+
+# 2. Start the Flask application
+export FLASK_ENV=development
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
+export PROMETHEUS_PORT=9464
+python app.py
+```
+
+### Verifying Observability
+
+1. **Inspect Traces in Jaeger**: Open `http://localhost:16686` in your browser. Select service `village-pond-planning` and click **Find Traces**.
+2. **Scrape Prometheus Metrics**:
+   ```bash
+   curl -s http://localhost:9464/metrics | grep -E "^(http_|contour_|pond_)"
+   ```
+3. **Inspect Correlated JSON Logs**:
+   ```bash
+   tail -n 10 logs/otel_app.jsonl | jq .
+   ```
+4. **Run Automated Telemetry Tests**:
+   ```bash
+   pytest -v tests/test_telemetry.py
+   ```
+
+---
+
 ## Roadmap
 
 - [x] Flask API skeleton with file upload endpoint
@@ -604,10 +708,11 @@ and generated plots are kept locally and excluded from Git.
 - [x] Pond candidate identification (`analysis/pond.py`)
 - [x] D8 flow direction, flow accumulation, channel detection (`analysis/hydrology.py`)
 - [x] Catchment area delineation (`analysis/catchment.py`)
-
+- [x] OpenTelemetry instrumentation (Traces, Metrics, Logs with Jaeger and Prometheus)
 - [x] Existing-water screening and separate catchment visualisations
 - [x] Historical rainfall and annual runoff estimates with map labels
 - [x] Interactive pond footprint, proposed depth, capacity and land/water fit checks
 - [x] Historical seasonal storage with adjustable losses and water use
 - [x] Pond-size recommendation: candidate grid, water-balance evaluation, target and alternatives modes (`services/sizing.py`)
 - [ ] Soil suitability and field validation
+

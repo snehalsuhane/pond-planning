@@ -14,6 +14,19 @@ from shapely.ops import transform as transform_geometry
 
 from utils.projection import get_utm_epsg
 
+# OpenTelemetry
+try:
+    from telemetry.decorators import span as otel_span
+    from telemetry.setup import get_metrics
+    _OTEL_AVAILABLE = True
+except ImportError:
+    _OTEL_AVAILABLE = False
+    from contextlib import contextmanager
+    @contextmanager
+    def otel_span(name, attributes=None):  # type: ignore[misc]
+        yield None
+    def get_metrics(): return {}
+
 SOURCE = 'Copernicus GLO-30'
 SOURCE_URL = 'https://copernicus-dem-30m.s3.amazonaws.com/readme.html'
 RESOLUTION_M = 30.
@@ -155,6 +168,15 @@ def fetch_elevation(land, buffer_m=2000., cache_dir=None):
                 except OSError:
                     pass
     # North-up GeoTIFF rows must be reversed for the existing south-to-north grid.
+    _log = logging.getLogger(__name__)
+    app_metrics = get_metrics()
+    if cached:
+        _log.info('fetch_elevation: cache HIT (key=%s...)', key[:12])
+        hit_ctr = app_metrics.get('elevation_cache_hits')
+        if hit_ctr:
+            hit_ctr.add(1, attributes={'source': 'disk_cache'})
+    else:
+        _log.info('fetch_elevation: cache MISS — downloaded %d tile(s)', len(sources))
     dem = np.flipud(north_up).astype(float)
     x = grid['left'] + (np.arange(grid['width'])+.5)*RESOLUTION_M
     y = grid['bottom'] + (np.arange(grid['height'])+.5)*RESOLUTION_M

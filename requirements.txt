@@ -8,3 +8,21 @@ scipy>=1.13.0
 matplotlib>=3.9.0
 shapely>=2.0,<3
 rasterio>=1.4,<2
+
+# OpenTelemetry — core
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+
+# OTel exporters
+opentelemetry-exporter-otlp-proto-http>=1.15.0
+opentelemetry-exporter-otlp-proto-grpc>=1.15.0
+opentelemetry-exporter-jaeger>=1.21.0
+opentelemetry-exporter-prometheus>=0.40b0
+
+# OTel auto-instrumentation
+opentelemetry-instrumentation-flask>=0.40b0
+opentelemetry-instrumentation-requests>=0.40b0
+opentelemetry-instrumentation-logging>=0.40b0
+
+# Prometheus client (for /metrics scrape endpoint)
+prometheus-client>=0.17.0

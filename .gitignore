@@ -37,4 +37,8 @@ scratch/
 .cache/terrain/
 .cache/rainfall/
 
+# OpenTelemetry & Jaeger local artifacts
+.jaeger/
+logs/
+
 *.tex
