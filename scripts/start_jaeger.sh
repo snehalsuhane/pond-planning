@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
 # scripts/start_jaeger.sh
-# Downloads and starts Jaeger all-in-one (single binary, no Docker needed).
+# Downloads and starts Jaeger all-in-one
 # Exposes:
-#   - UI:             http://localhost:16686
+#   - UI:             http://localhost:4000  → external port 4273
 #   - OTLP/HTTP:      http://localhost:4318   (traces from the Flask app)
-#   - OTLP/gRPC:      localhost:4317
+#   - OTLP/gRPC:      localhost:4317          (internal only)
 # =============================================================================
 set -euo pipefail
 
@@ -41,11 +41,12 @@ else
 fi
 
 echo "[Jaeger] Starting Jaeger all-in-one..."
-echo "         UI  → http://localhost:16686"
-echo "         OTLP/HTTP → http://localhost:4318"
+echo "         UI  → http://localhost:4000  (external: port 4273)"
+echo "         OTLP/HTTP → http://localhost:4318  (internal)"
 
 exec "$JAEGER_BIN" \
     --collector.otlp.enabled=true \
     --collector.otlp.http.host-port=":4318" \
     --collector.otlp.grpc.host-port=":4317" \
+    --query.http-server.host-port=":4000" \
     --query.ui-config="" 2>&1

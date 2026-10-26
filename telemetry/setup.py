@@ -5,8 +5,8 @@ OpenTelemetry bootstrap for the Village Pond Planning System.
 
 Exporters configured
 --------------------
-* Traces  → Jaeger  (OTLP/HTTP on localhost:4318)  +  Console (stdout)
-* Metrics → Prometheus scrape endpoint on :9464
+* Traces  → Jaeger  (OTLP/HTTP on localhost:4318, internal)  +  Console (stdout)
+* Metrics → Prometheus scrape endpoint on :6000  (external port 6273)
 * Logs    → OTLP/HTTP  +  rotating JSON file  +  console
 
 Call ``init_telemetry(app)`` once inside ``create_app()`` before any
@@ -52,8 +52,9 @@ RESOURCE = Resource.create({
 tracer: trace.Tracer = None  # type: ignore[assignment]
 meter: metrics.Meter = None  # type: ignore[assignment]
 
-# Prometheus port
-PROMETHEUS_PORT = int(os.getenv("PROMETHEUS_PORT", "9464"))
+# Prometheus port — default 6000 maps to external port 6273 on
+# machine 2273. Override via the PROMETHEUS_PORT environment variable.
+PROMETHEUS_PORT = int(os.getenv("PROMETHEUS_PORT", "6000"))
 
 # OTLP endpoint (Jaeger all-in-one default)
 OTLP_HTTP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")

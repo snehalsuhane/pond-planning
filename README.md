@@ -615,19 +615,19 @@ The Village Pond Planning System includes full OpenTelemetry (OTel) observabilit
                │                            │                          │
                ▼                            ▼                          ▼
         Jaeger All-in-One           Prometheus Metric          Rotating JSON File
-      (http://localhost:16686)     (http://localhost:9464)    (logs/otel_app.jsonl)
-       Port 4318 (OTLP/HTTP)              /metrics            trace_id & span_id injected
+      (http://localhost:4000)      (http://localhost:6000)    (logs/otel_app.jsonl)
+       Port 4318 (OTLP/HTTP)             /metrics             trace_id & span_id injected
 ```
 
 ### Observability Endpoints
 
-| Component | Endpoint | Purpose |
-| :--- | :--- | :--- |
-| **Jaeger UI** | `http://localhost:16686` | Interactive trace search, timeline, and waterfall views |
-| **Jaeger OTLP Collector** | `http://localhost:4318` | Ingests OTLP/HTTP traces |
-| **Prometheus Metrics** | `http://localhost:9464/metrics` | Prometheus metrics scrape endpoint |
-| **Flask Application** | `http://localhost:5000` | Application UI and REST API |
-| **Structured Logs** | `logs/otel_app.jsonl` | JSON-lines log with correlated `trace_id` & `span_id` |
+| Component | Internal endpoint | External endpoint (machine 2273) | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Jaeger UI** | `http://localhost:4000` | `http://10.1.75.51:4273` | Interactive trace search, timeline, and waterfall views |
+| **Jaeger OTLP Collector** | `http://localhost:4318` | *(internal only)* | Ingests OTLP/HTTP traces from the Flask app |
+| **Prometheus Metrics** | `http://localhost:6000/metrics` | `http://10.1.75.51:6273/metrics` | Prometheus metrics scrape endpoint |
+| **Flask Application** | `http://localhost:5000` | `http://10.1.75.51:5273` | Application UI and REST API |
+| **Structured Logs** | `logs/otel_app.jsonl` | — | JSON-lines log with correlated `trace_id` & `span_id` |
 
 ### Captured Data
 
@@ -675,16 +675,16 @@ bash scripts/start_jaeger.sh &
 # 2. Start the Flask application
 export FLASK_ENV=development
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
-export PROMETHEUS_PORT=9464
+export PROMETHEUS_PORT=6000
 python app.py
 ```
 
 ### Verifying Observability
 
-1. **Inspect Traces in Jaeger**: Open `http://localhost:16686` in your browser. Select service `village-pond-planning` and click **Find Traces**.
+1. **Inspect Traces in Jaeger**: Open `http://localhost:4000` (or externally `http://10.1.75.51:4273`) in your browser. Select service `village-pond-planning` and click **Find Traces**.
 2. **Scrape Prometheus Metrics**:
    ```bash
-   curl -s http://localhost:9464/metrics | grep -E "^(http_|contour_|pond_)"
+   curl -s http://localhost:6000/metrics | grep -E "^(http_|contour_|pond_)"
    ```
 3. **Inspect Correlated JSON Logs**:
    ```bash
