@@ -19,6 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── 1. Jaeger ─────────────────────────────────────────────────────────────────
+mkdir -p logs   # ensure log directory exists before Jaeger or Flask write to it
 if pgrep -f "jaeger-all-in-one" > /dev/null 2>&1; then
     echo "[OTel] Jaeger already running."
 else
