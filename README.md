@@ -68,13 +68,11 @@ pond-planning/
 ## Quick Start
 
 ```bash
-# 1. Activate your virtual environment
-source my_env/bin/activate
 
-# 2. Install dependencies  (includes pyproj for coordinate projection)
+# 1. Install dependencies  (includes pyproj for coordinate projection)
 pip install -r requirements.txt
 
-# 3. Run the development server
+# 2. Run the development server
 python app.py
 ```
 
@@ -663,7 +661,6 @@ The Village Pond Planning System includes full OpenTelemetry (OTel) observabilit
 To run Jaeger and the instrumented Flask application together:
 
 ```bash
-source ~/my_env/bin/activate
 bash run_with_otel.sh
 ```
 
