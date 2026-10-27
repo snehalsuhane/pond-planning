@@ -42,5 +42,8 @@ echo ""
 export FLASK_ENV=development
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
 export PROMETHEUS_PORT=6000
+# Protobuf C-extension uses tp_new metaclass which Python 3.14 removed.
+# Force pure-Python implementation to avoid the crash.
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 
 python app.py

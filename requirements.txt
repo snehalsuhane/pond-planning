@@ -26,3 +26,7 @@ opentelemetry-instrumentation-logging>=0.40b0
 
 # Prometheus client (for /metrics scrape endpoint)
 prometheus-client>=0.17.0
+
+# protobuf>=5.28 rewrote the upb backend; required for Python 3.14 compatibility
+# (older versions crash with "Metaclasses with custom tp_new are not supported")
+protobuf>=5.28.0
